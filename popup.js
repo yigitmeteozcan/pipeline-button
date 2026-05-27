@@ -159,11 +159,11 @@
     tokenInput.dataset.masked = 'true';
     tokenInput.type = 'password';
 
-    // Verify connection
+    // Verify connection — background.js reads token from storage, not from this message
     saveBtn.textContent = 'Verifying...';
 
     chrome.runtime.sendMessage(
-      { type: 'VERIFY_CONNECTION', payload: { token, boardId } },
+      { type: 'VERIFY_CONNECTION' },
       (response) => {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Settings';

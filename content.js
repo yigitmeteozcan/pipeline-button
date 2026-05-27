@@ -11,29 +11,18 @@
     return str.replace(/<[^>]*>/g, '').trim().slice(0, maxLen);
   }
 
-  function queryText(selector) {
-    try {
-      const el = document.querySelector(selector);
-      return el ? sanitize(el.textContent) : '';
-    } catch (_) {
-      return '';
-    }
-  }
-
   function scrapeCompany() {
     const name = sanitize(
       (document.querySelector('h1') || {}).textContent || '',
       255
     );
 
-    // Industry — appears in the about section sidebar
     const industry = sanitize(
       (document.querySelector(
         '.org-top-card-summary-info-list__info-item, [data-test-id="about-us__industry"] dd, .basic-info-item'
       ) || {}).textContent || ''
     );
 
-    // Employee count
     const size = (() => {
       try {
         const els = document.querySelectorAll(
@@ -43,12 +32,7 @@
           const t = sanitize(el.textContent);
           if (/\d/.test(t) && /employee/i.test(t)) return t;
         }
-        // Fallback: look for "employees" near any text
-        const walker = document.createTreeWalker(
-          document.body,
-          NodeFilter.SHOW_TEXT,
-          null
-        );
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
         let node;
         while ((node = walker.nextNode())) {
           const t = node.textContent.trim();
@@ -60,21 +44,18 @@
       }
     })();
 
-    // About / description
     const description = sanitize(
       (document.querySelector(
         '[data-test-id="about-us__description"] p, .org-about-us-organization-description, .org-page-details__definition-text'
       ) || {}).textContent || ''
     );
 
-    // Headquarters
     const headquarters = sanitize(
       (document.querySelector(
         '[data-test-id="about-us__headquarters"] dd, [data-test-id="about-us__location"] dd'
       ) || {}).textContent || ''
     );
 
-    // Website
     const website = (() => {
       try {
         const link = document.querySelector(
@@ -91,20 +72,12 @@
     return { name, industry, size, description, headquarters, website, linkedin_url };
   }
 
-  // ── Prototype-pollution guard ─────────────────────────────────────────────
-
-  const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-
-  function isSafe(value) {
-    return !DANGEROUS_KEYS.has(String(value).toLowerCase().trim());
-  }
-
-  // ── Button injection ──────────────────────────────────────────────────────
+  // ── Button state setters ──────────────────────────────────────────────────
 
   function createButton() {
     const btn = document.createElement('button');
     btn.id = BTN_ID;
-    btn.className = `${BTN_PREFIX}-button`;
+    btn.className = BTN_PREFIX + '-button';
 
     Object.assign(btn.style, {
       display: 'inline-flex',
@@ -170,29 +143,23 @@
     btn.style.cursor = 'pointer';
   }
 
-  // ── Click handler ─────────────────────────────────────────────────────────
+  // ── Click handler — all storage access is delegated to background.js ───────
 
   async function handleClick(btn) {
     try {
-      const { MONDAY_API_TOKEN, MONDAY_BOARD_ID } = await new Promise(resolve =>
-        chrome.storage.sync.get(['MONDAY_API_TOKEN', 'MONDAY_BOARD_ID'], resolve)
+      // Ask background.js if credentials are configured — no direct storage access here
+      const configResponse = await new Promise(resolve =>
+        chrome.runtime.sendMessage({ type: 'CHECK_CONFIG' }, resolve)
       );
 
-      if (!MONDAY_API_TOKEN || !MONDAY_BOARD_ID) {
+      if (!configResponse || !configResponse.configured) {
         setUnconfiguredState(btn);
-        // Open popup
-        chrome.runtime.sendMessage({ type: 'OPEN_POPUP' });
         return;
       }
 
       setLoadingState(btn);
 
       const data = scrapeCompany();
-
-      if (!isSafe(data.name)) {
-        setErrorState(btn);
-        return;
-      }
 
       const response = await new Promise(resolve =>
         chrome.runtime.sendMessage({ type: 'ADD_TO_PIPELINE', payload: data }, resolve)
@@ -211,7 +178,6 @@
   // ── Injection logic ───────────────────────────────────────────────────────
 
   function findInsertionPoint() {
-    // Try various LinkedIn selectors for the header area
     const candidates = [
       '.org-top-card__primary-content',
       '.org-top-card',
@@ -229,7 +195,7 @@
   }
 
   function injectButton() {
-    if (document.getElementById(BTN_ID)) return; // already injected
+    if (document.getElementById(BTN_ID)) return;
 
     const anchor = findInsertionPoint();
     if (!anchor) return;
@@ -237,16 +203,14 @@
     const btn = createButton();
     btn.addEventListener('click', () => handleClick(btn));
 
-    // Wrap in a container with unique class to avoid LinkedIn CSS clashes
     const wrapper = document.createElement('div');
-    wrapper.className = `${BTN_PREFIX}-wrapper`;
+    wrapper.className = BTN_PREFIX + '-wrapper';
     Object.assign(wrapper.style, {
       margin: '8px 0',
       display: 'block',
     });
     wrapper.appendChild(btn);
 
-    // Insert after the anchor element
     if (anchor.parentNode) {
       anchor.parentNode.insertBefore(wrapper, anchor.nextSibling);
     } else {
@@ -254,7 +218,7 @@
     }
   }
 
-  // ── MutationObserver for LinkedIn SPA navigation ──────────────────────────
+  // ── MutationObserver — handles LinkedIn SPA navigation ────────────────────
 
   let debounceTimer = null;
 
@@ -270,6 +234,8 @@
   const observer = new MutationObserver(onMutation);
   observer.observe(document.body, { childList: true, subtree: true });
 
-  // Initial injection
+  // Disconnect on unload to prevent memory leaks
+  window.addEventListener('unload', () => observer.disconnect());
+
   injectButton();
 })();
