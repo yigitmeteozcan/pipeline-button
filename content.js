@@ -11,6 +11,16 @@
     return str.replace(/<[^>]*>/g, '').trim().slice(0, maxLen);
   }
 
+  // Only allow https:// URLs — rejects javascript:, data:, blob:, etc.
+  // Prevents a tampered LinkedIn DOM from injecting executable URLs into
+  // Monday comments.
+  function safeUrl(raw, maxLen = 500) {
+    if (typeof raw !== 'string') return '';
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith('https://')) return '';
+    return sanitize(trimmed, maxLen);
+  }
+
   function scrapeCompany() {
     const name = sanitize(
       (document.querySelector('h1') || {}).textContent || '',
@@ -56,18 +66,19 @@
       ) || {}).textContent || ''
     );
 
+    // safeUrl rejects any non-https URL — prevents javascript:/data: injection
     const website = (() => {
       try {
         const link = document.querySelector(
           '[data-test-id="about-us__website"] a, a[href*="//"][data-tracking-control-name*="website"]'
         );
-        return link ? sanitize(link.href) : '';
+        return link ? safeUrl(link.href) : '';
       } catch (_) {
         return '';
       }
     })();
 
-    const linkedin_url = sanitize(window.location.href);
+    const linkedin_url = safeUrl(window.location.href);
 
     return { name, industry, size, description, headquarters, website, linkedin_url };
   }
@@ -147,7 +158,6 @@
 
   async function handleClick(btn) {
     try {
-      // Ask background.js if credentials are configured — no direct storage access here
       const configResponse = await new Promise(resolve =>
         chrome.runtime.sendMessage({ type: 'CHECK_CONFIG' }, resolve)
       );
@@ -234,7 +244,6 @@
   const observer = new MutationObserver(onMutation);
   observer.observe(document.body, { childList: true, subtree: true });
 
-  // Disconnect on unload to prevent memory leaks
   window.addEventListener('unload', () => observer.disconnect());
 
   injectButton();

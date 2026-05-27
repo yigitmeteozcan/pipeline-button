@@ -5,13 +5,13 @@
  * Run with: node --test tests/security.test.js
  *
  * Threat model: hardcoded credentials, token isolation, injection,
- * prototype pollution, permission creep, supply-chain risks.
+ * prototype pollution, permission creep, supply-chain risks, sender spoofing.
  */
 
-const { test }  = require('node:test');
-const assert    = require('node:assert/strict');
-const fs        = require('node:fs');
-const path      = require('node:path');
+const { test } = require('node:test');
+const assert   = require('node:assert/strict');
+const fs       = require('node:fs');
+const path     = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -21,7 +21,7 @@ function readSource(filename) {
 
 // Extension source files — excludes this test file to avoid self-reference
 function readAllSources() {
-  const files = [
+  return [
     'background.js',
     'content.js',
     'popup.js',
@@ -31,14 +31,13 @@ function readAllSources() {
     'README.md',
     'generate-icons.js',
     'tests/logic.test.js',
-  ];
-  return files.map(f => ({ file: f, src: readSource(f) }));
+  ].map(f => ({ file: f, src: readSource(f) }));
 }
 
 // Build the real board ID from parts so this file doesn't self-trigger the scan
 const REAL_BOARD_ID = ['181465', '07025'].join('');
 
-// ── assertSafe (same logic as background.js) ──────────────────────────────
+// ── assertSafe replicated from background.js ──────────────────────────────
 
 const DANGEROUS_OPS = [
   'delete_item', 'delete_board', 'delete_column', 'delete_group',
@@ -54,7 +53,8 @@ function assertSafe(query) {
       throw new Error('SAFETY ERROR: blocked dangerous mutation: ' + op);
     }
   }
-  const hasCreate = normalized.includes('create_item') || normalized.includes('create_update');
+  const hasCreate =
+    normalized.includes('create_item') || normalized.includes('create_update');
   if (!hasCreate) {
     throw new Error('SAFETY ERROR: query does not contain an allowed operation');
   }
@@ -64,88 +64,58 @@ function assertSafe(query) {
 
 test('Scenario 1 — no hardcoded tokens or real board ID in any source file', () => {
   const realTokenPattern = /eyJ[a-zA-Z0-9+/]{20,}/;
-  const realBoardId = REAL_BOARD_ID;
 
-  const sources = readAllSources();
   const violations = [];
-
-  for (const { file, src } of sources) {
+  for (const { file, src } of readAllSources()) {
     if (realTokenPattern.test(src)) {
       violations.push(file + ': contains JWT-pattern token');
     }
-    if (src.includes(realBoardId)) {
-      violations.push(file + ': contains real board ID ' + realBoardId);
+    if (src.includes(REAL_BOARD_ID)) {
+      violations.push(file + ': contains real board ID');
     }
   }
 
-  assert.equal(
-    violations.length, 0,
-    'Violations found:\n' + violations.join('\n')
-  );
+  assert.equal(violations.length, 0, 'Violations:\n' + violations.join('\n'));
 });
 
 // ── SCENARIO 2 — content.js never accesses storage or makes fetch calls ───
 
-test('Scenario 2 — content.js has no chrome.storage access and no fetch calls', () => {
+test('Scenario 2 — content.js has no direct storage access and no fetch calls', () => {
   const src = readSource('content.js');
 
-  assert.ok(
-    !src.includes('chrome.storage'),
-    'content.js must not access chrome.storage — token isolation violated'
-  );
-  assert.ok(
-    !src.includes('fetch('),
-    'content.js must not call fetch() — all network calls go through background.js'
-  );
-  assert.ok(
-    !src.includes('XMLHttpRequest'),
-    'content.js must not use XMLHttpRequest'
-  );
-  assert.ok(
-    !src.includes('importScripts'),
-    'content.js must not call importScripts'
-  );
+  assert.ok(!src.includes('chrome.storage'),
+    'content.js must not access chrome.storage — use CHECK_CONFIG message instead');
+  assert.ok(!src.includes('fetch('),
+    'content.js must not call fetch() — all network calls go through background.js');
+  assert.ok(!src.includes('XMLHttpRequest'),
+    'content.js must not use XMLHttpRequest');
+  assert.ok(!src.includes('importScripts'),
+    'content.js must not call importScripts');
 });
 
-// ── SCENARIO 3 — token never cached at module level in background.js ──────
+// ── SCENARIO 3 — token never cached at module level ───────────────────────
 
-test('Scenario 3 — token is never cached at module level in background.js', () => {
+test('Scenario 3 — token never cached at module level in background.js', () => {
   const src = readSource('background.js');
   const lines = src.split('\n');
 
-  // Find lines that declare a top-level token variable (outside any function)
-  // A simple heuristic: look for "const token" or "let token" at zero indent
-  // that are not inside a function body
-  const suspiciousTopLevel = lines.filter(line => {
-    const trimmed = line.trimStart();
-    return (
-      (trimmed.startsWith('const token') || trimmed.startsWith('let token')) &&
-      line.match(/^(const|let)\s+token/)  // no indentation — top-level
-    );
-  });
-
-  assert.equal(
-    suspiciousTopLevel.length, 0,
-    'Token cached at module level: ' + suspiciousTopLevel.join('; ')
+  const suspiciousTopLevel = lines.filter(line =>
+    (line.startsWith('const token') || line.startsWith('let token'))
   );
 
-  // Verify token is not a parameter to callMonday (the core API call)
-  assert.ok(
-    !src.includes('async function callMonday(token'),
-    'callMonday must not accept token as a parameter'
-  );
-  assert.ok(
-    !src.includes('async function createItem(token'),
-    'createItem must not accept token as a parameter'
-  );
-  assert.ok(
-    !src.includes('async function createUpdate(token'),
-    'createUpdate must not accept token as a parameter'
-  );
-  assert.ok(
-    !src.includes('async function getBoardName(token'),
-    'getBoardName must not accept token as a parameter'
-  );
+  assert.equal(suspiciousTopLevel.length, 0,
+    'Token at top-level scope: ' + suspiciousTopLevel.join('; '));
+
+  assert.ok(!src.includes('async function callMonday(token'),
+    'callMonday must not accept token as a parameter');
+  assert.ok(!src.includes('async function createItem(token'),
+    'createItem must not accept token as a parameter');
+  assert.ok(!src.includes('async function createUpdate(token'),
+    'createUpdate must not accept token as a parameter');
+  assert.ok(!src.includes('async function getBoardName(token'),
+    'getBoardName must not accept token as a parameter');
+  assert.ok(!src.includes('async function executeMondayRequest(token'),
+    'executeMondayRequest must not accept token as a parameter');
 });
 
 // ── SCENARIO 4 — assertSafe blocks all dangerous mutations ────────────────
@@ -159,17 +129,14 @@ test('Scenario 4 — assertSafe blocks every dangerous mutation', () => {
     'mutation { update_item(item_id: 1) { id } }',
     'mutation { clear_item_updates(item_id: 1) { id } }',
     'mutation { change_column_value(item_id: 1, column_id: "x", value: "y") { id } }',
+    'mutation { duplicate_item(item_id: 1) { id } }',
+    'mutation { change_multiple_column_values(item_id: 1) { id } }',
   ];
 
   for (const q of blocked) {
-    assert.throws(
-      () => assertSafe(q),
-      /SAFETY ERROR/,
-      'Expected SAFETY ERROR for: ' + q
-    );
+    assert.throws(() => assertSafe(q), /SAFETY ERROR/, 'Expected block for: ' + q);
   }
 
-  // Allowed operations must pass
   assert.doesNotThrow(
     () => assertSafe('mutation { create_item(board_id: "1", item_name: "x") { id } }')
   );
@@ -178,31 +145,22 @@ test('Scenario 4 — assertSafe blocks every dangerous mutation', () => {
   );
 });
 
-// ── SCENARIO 5 — no GraphQL string interpolation in background.js ─────────
+// ── SCENARIO 5 — no GraphQL string interpolation ──────────────────────────
 
 test('Scenario 5 — GraphQL query strings contain no ${} interpolation', () => {
   const src = readSource('background.js');
-
-  // Extract all template literal content that contains GraphQL keywords
-  // A template literal with mutation/query must not contain ${ }
   const templateLiteralRe = /`([^`]*)`/g;
   let match;
   const violations = [];
 
   while ((match = templateLiteralRe.exec(src)) !== null) {
     const content = match[1];
-    // Only check template literals that contain GraphQL keywords
-    if (/(mutation|query)\s+\w/i.test(content)) {
-      if (/\$\{/.test(content)) {
-        violations.push('GraphQL template literal contains ${} interpolation: ' + content.slice(0, 80));
-      }
+    if (/(mutation|query)\s+\w/i.test(content) && /\$\{/.test(content)) {
+      violations.push('Interpolation in GraphQL literal: ' + content.slice(0, 80));
     }
   }
 
-  assert.equal(
-    violations.length, 0,
-    'GraphQL interpolation found:\n' + violations.join('\n')
-  );
+  assert.equal(violations.length, 0, violations.join('\n'));
 });
 
 // ── SCENARIO 6 — token masked in all error paths ──────────────────────────
@@ -210,95 +168,70 @@ test('Scenario 5 — GraphQL query strings contain no ${} interpolation', () => 
 test('Scenario 6 — error messages never expose raw token string', () => {
   const fakeToken = 'super_secret_monday_token_abc123';
 
-  // Simulate the masking function from background.js
   function maskToken(str, token) {
     if (!token) return str;
     return str.replaceAll(token, '[REDACTED]');
   }
 
-  // Simulate an error message that accidentally contains the token
   const rawError = 'Authorization failed for token: ' + fakeToken;
   const masked = maskToken(rawError, fakeToken);
 
   assert.ok(!masked.includes(fakeToken), 'Token must not appear in masked error');
   assert.ok(masked.includes('[REDACTED]'), 'Masked string must contain [REDACTED]');
 
-  // Verify the safe error messages hardcoded in background.js
   const src = readSource('background.js');
-  // The only errors thrown or returned must be safe strings
-  const unsafeErrorPattern = /sendResponse\(\{[^}]*error:\s*err\.message/;
-  assert.ok(
-    !unsafeErrorPattern.test(src),
-    'background.js must not forward raw err.message to sendResponse'
-  );
+  // Raw err.message must never flow directly into sendResponse
+  const unsafePattern = /sendResponse\(\{[^}]*error:\s*err\.message/;
+  assert.ok(!unsafePattern.test(src),
+    'background.js must not forward raw err.message to sendResponse');
 });
 
-// ── SCENARIO 7 — message type whitelist enforced ──────────────────────────
+// ── SCENARIO 7 — message type whitelist ───────────────────────────────────
 
 test('Scenario 7 — unknown message types are rejected by whitelist', () => {
-  // Replicate the whitelist from background.js
-  const ALLOWED_MESSAGES = new Set(['ADD_TO_PIPELINE', 'VERIFY_CONNECTION', 'CHECK_CONFIG']);
+  const ALLOWED = new Set(['ADD_TO_PIPELINE', 'VERIFY_CONNECTION', 'CHECK_CONFIG']);
 
-  function handleMessage(message) {
-    if (!message || !ALLOWED_MESSAGES.has(message.type)) {
-      return { success: false, error: 'Unknown message type' };
-    }
+  function handle(msg) {
+    if (!msg || !ALLOWED.has(msg.type)) return { success: false };
     return { success: true };
   }
 
-  // Unknown types must be rejected
-  assert.equal(handleMessage({ type: 'EVIL_EXFIL' }).success, false);
-  assert.equal(handleMessage({ type: 'GET_TOKEN' }).success, false);
-  assert.equal(handleMessage({ type: '' }).success, false);
-  assert.equal(handleMessage(null).success, false);
-  assert.equal(handleMessage({ type: 'OPEN_POPUP' }).success, false);
+  assert.equal(handle({ type: 'EVIL_EXFIL' }).success, false);
+  assert.equal(handle({ type: 'GET_TOKEN' }).success, false);
+  assert.equal(handle({ type: '' }).success, false);
+  assert.equal(handle(null).success, false);
+  assert.equal(handle({ type: 'OPEN_POPUP' }).success, false);
+  assert.equal(handle({ type: 'ADD_TO_PIPELINE' }).success, true);
+  assert.equal(handle({ type: 'CHECK_CONFIG' }).success, true);
+  assert.equal(handle({ type: 'VERIFY_CONNECTION' }).success, true);
 
-  // Known types pass the whitelist check
-  assert.equal(handleMessage({ type: 'ADD_TO_PIPELINE' }).success, true);
-  assert.equal(handleMessage({ type: 'CHECK_CONFIG' }).success, true);
-  assert.equal(handleMessage({ type: 'VERIFY_CONNECTION' }).success, true);
-
-  // Also verify the whitelist is present in the actual source
   const src = readSource('background.js');
-  assert.ok(src.includes('ALLOWED_MESSAGES'), 'ALLOWED_MESSAGES whitelist must exist in background.js');
-  assert.ok(src.includes("'ADD_TO_PIPELINE'"), 'ADD_TO_PIPELINE must be in whitelist');
-  assert.ok(src.includes("'VERIFY_CONNECTION'"), 'VERIFY_CONNECTION must be in whitelist');
-  assert.ok(src.includes("'CHECK_CONFIG'"), 'CHECK_CONFIG must be in whitelist');
+  assert.ok(src.includes('ALLOWED_MESSAGES'), 'ALLOWED_MESSAGES must exist');
+  assert.ok(src.includes("'ADD_TO_PIPELINE'"), 'ADD_TO_PIPELINE in whitelist');
+  assert.ok(src.includes("'VERIFY_CONNECTION'"), 'VERIFY_CONNECTION in whitelist');
+  assert.ok(src.includes("'CHECK_CONFIG'"), 'CHECK_CONFIG in whitelist');
 });
 
 // ── SCENARIO 8 — prototype pollution rejected ─────────────────────────────
 
-test('Scenario 8 — prototype pollution via company name is rejected before API call', () => {
+test('Scenario 8 — prototype pollution via company name is rejected', () => {
   const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+  function isSafe(v) { return !DANGEROUS_KEYS.has(String(v).toLowerCase().trim()); }
 
-  function isSafe(value) {
-    return !DANGEROUS_KEYS.has(String(value).toLowerCase().trim());
-  }
-
-  // Verify the guard rejects dangerous names
   assert.equal(isSafe('__proto__'), false);
   assert.equal(isSafe('constructor'), false);
   assert.equal(isSafe('prototype'), false);
-  assert.equal(isSafe('  __PROTO__  '.toLowerCase().trim()), false);
 
-  // Verify Object.prototype is not modified
   const before = Object.keys(Object.prototype).join(',');
-
-  // Simulate receiving a poisoned payload
-  const payload = { name: '__proto__', industry: 'X' };
-  const rejected = !isSafe(payload.name);
-  assert.ok(rejected, 'Payload with __proto__ name must be rejected');
-
+  const payload = { name: '__proto__' };
+  assert.ok(!isSafe(payload.name), 'Poisoned payload must be rejected');
   const after = Object.keys(Object.prototype).join(',');
   assert.equal(before, after, 'Object.prototype must not be modified');
 
-  // Verify isSafe check is present in background.js
   const src = readSource('background.js');
-  assert.ok(src.includes('isSafe'), 'isSafe guard must be present in background.js');
-  assert.ok(
-    src.includes("'__proto__'") || src.includes('"__proto__"'),
-    '__proto__ must be in the dangerous keys set'
-  );
+  assert.ok(src.includes('isSafe'), 'isSafe guard must be present');
+  assert.ok(src.includes("'__proto__'") || src.includes('"__proto__"'),
+    '__proto__ must be in dangerous keys');
 });
 
 // ── SCENARIO 9 — manifest permissions are minimal ─────────────────────────
@@ -306,52 +239,138 @@ test('Scenario 8 — prototype pollution via company name is rejected before API
 test('Scenario 9 — manifest permissions are minimal and host_permissions are scoped', () => {
   const manifest = JSON.parse(readSource('manifest.json'));
 
-  // Only storage permission
-  assert.deepEqual(
-    manifest.permissions,
-    ['storage'],
-    'permissions must be exactly ["storage"]'
-  );
+  assert.deepEqual(manifest.permissions, ['storage'],
+    'permissions must be exactly ["storage"]');
 
-  // Only linkedin and monday host_permissions
-  const allowedHosts = new Set([
+  const allowed = new Set([
     'https://www.linkedin.com/company/*',
     'https://api.monday.com/*',
   ]);
   for (const hp of manifest.host_permissions) {
-    assert.ok(allowedHosts.has(hp), 'Unexpected host_permission: ' + hp);
+    assert.ok(allowed.has(hp), 'Unexpected host_permission: ' + hp);
   }
   assert.equal(manifest.host_permissions.length, 2, 'Must have exactly 2 host_permissions');
-
-  // Must be MV3
-  assert.equal(manifest.manifest_version, 3, 'Must use manifest_version 3');
-
-  // CSP must be set
-  assert.ok(manifest.content_security_policy, 'content_security_policy must be set');
+  assert.equal(manifest.manifest_version, 3, 'Must use MV3');
+  assert.ok(manifest.content_security_policy, 'CSP must be set');
   assert.ok(
     manifest.content_security_policy.extension_pages.includes("script-src 'self'"),
     "CSP must include script-src 'self'"
   );
 
-  // No dangerous permissions
   const dangerous = ['tabs', 'webRequest', 'browsingData', 'cookies', 'history', 'downloads', 'nativeMessaging'];
   for (const p of dangerous) {
-    assert.ok(
-      !(manifest.permissions || []).includes(p),
-      'Dangerous permission found: ' + p
-    );
+    assert.ok(!(manifest.permissions || []).includes(p), 'Dangerous permission: ' + p);
   }
 });
 
-// ── SCENARIO 10 — board ID not in any source file ─────────────────────────
+// ── SCENARIO 10 — board ID absent from all source files ───────────────────
 
 test('Scenario 10 — real board ID is absent from all source files', () => {
-  const realBoardId = REAL_BOARD_ID;
-  const sources = readAllSources();
-  const hits = sources.filter(({ src }) => src.includes(realBoardId));
+  const hits = readAllSources().filter(({ src }) => src.includes(REAL_BOARD_ID));
+  assert.equal(hits.length, 0,
+    'Board ID found in: ' + hits.map(h => h.file).join(', '));
+});
 
+// ── SCENARIO 11 — sender validation in message handler ───────────────────
+//
+// Prevents a page script on linkedin.com (e.g. via XSS) from sending
+// chrome.runtime messages to the background service worker and triggering
+// Monday API calls with attacker-controlled payloads.
+
+test('Scenario 11 — message handler rejects messages from unknown senders', () => {
+  const src = readSource('background.js');
+
+  // The listener must check sender.id
+  assert.ok(
+    src.includes('sender.id') && src.includes('chrome.runtime.id'),
+    'Message handler must validate sender.id === chrome.runtime.id'
+  );
+
+  // The handler must not ignore the sender parameter
+  assert.ok(
+    !src.includes('_sender'),
+    'sender must not be unused (_sender) — it must be validated'
+  );
+
+  // Simulate the guard logic
+  const myExtId = 'abc123extensionid';
+
+  function handleMessage(message, sender) {
+    if (!sender || sender.id !== myExtId) return false; // rejected
+    return true; // accepted
+  }
+
+  assert.equal(handleMessage({}, { id: myExtId }), true,  'Own extension allowed');
+  assert.equal(handleMessage({}, { id: 'evil' }),  false, 'Foreign extension blocked');
+  assert.equal(handleMessage({}, null),            false, 'Null sender blocked');
+  assert.equal(handleMessage({}, {}),              false, 'No ID blocked');
+  // A content script injected by a malicious page would have a different origin
+  assert.equal(handleMessage({}, { id: 'mallory-ext' }), false, 'Malicious extension blocked');
+});
+
+// ── SCENARIO 12 — URL protocol validation blocks javascript: and data: URLs ─
+//
+// A tampered LinkedIn DOM could inject javascript:/data:/blob: URLs into
+// website links. safeUrl() must reject anything that doesn't start with https://.
+
+test('Scenario 12 — safeUrl rejects non-https URLs including javascript: and data:', () => {
+  // Replicate safeUrl from content.js
+  function sanitize(str, maxLen = 500) {
+    if (typeof str !== 'string') return '';
+    return str.replace(/<[^>]*>/g, '').trim().slice(0, maxLen);
+  }
+
+  function safeUrl(raw, maxLen = 500) {
+    if (typeof raw !== 'string') return '';
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith('https://')) return '';
+    return sanitize(trimmed, maxLen);
+  }
+
+  // Dangerous URLs — must all return empty string
+  const dangerous = [
+    'javascript:alert(document.cookie)',
+    'javascript:void(0)',
+    'data:text/html,<script>alert(1)</script>',
+    'blob:https://linkedin.com/xyz',
+    'http://attacker.com',
+    'ftp://files.example.com',
+    '//attacker.com/steal',
+    '',
+    null,
+    undefined,
+  ];
+
+  for (const url of dangerous) {
+    assert.equal(safeUrl(url), '',
+      'Must reject: ' + String(url).slice(0, 60));
+  }
+
+  // Safe URLs — must be returned (sanitized)
   assert.equal(
-    hits.length, 0,
-    'Board ID found in: ' + hits.map(h => h.file).join(', ')
+    safeUrl('https://www.linkedin.com/company/acme/'),
+    'https://www.linkedin.com/company/acme/',
+    'Valid LinkedIn URL must pass'
+  );
+  assert.equal(
+    safeUrl('https://acme.com'),
+    'https://acme.com',
+    'Valid website URL must pass'
+  );
+
+  // Verify safeUrl is present in content.js source
+  const src = readSource('content.js');
+  assert.ok(src.includes('safeUrl'), 'safeUrl function must exist in content.js');
+  assert.ok(
+    src.includes("startsWith('https://')") || src.includes('startsWith("https://")'),
+    'safeUrl must check https:// prefix'
+  );
+  assert.ok(
+    !src.includes('sanitize(window.location.href)'),
+    'window.location.href must use safeUrl not raw sanitize'
+  );
+  assert.ok(
+    !src.includes('sanitize(link.href)'),
+    'link.href must use safeUrl not raw sanitize'
   );
 });
