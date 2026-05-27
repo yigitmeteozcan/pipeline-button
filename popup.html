@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pipeline Button</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <span class="header-icon">🔗</span>
+      <div>
+        <div class="header-title">Pipeline Button</div>
+        <div class="header-sub">Add LinkedIn companies to Monday in one click</div>
+      </div>
+    </header>
+
+    <section class="section">
+      <label class="label" for="token-input">Monday API Token</label>
+      <div class="input-row">
+        <input
+          id="token-input"
+          class="input"
+          type="password"
+          placeholder="Enter your API token"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="toggle-token" class="icon-btn" type="button" aria-label="Show/hide token">👁</button>
+      </div>
+    </section>
+
+    <section class="section">
+      <label class="label" for="board-input">Board ID</label>
+      <input
+        id="board-input"
+        class="input"
+        type="text"
+        placeholder="e.g. 1234567890"
+        autocomplete="off"
+        spellcheck="false"
+        inputmode="numeric"
+      />
+    </section>
+
+    <button id="save-btn" class="btn-primary" type="button">Save Settings</button>
+
+    <div id="status-box" class="status-box hidden"></div>
+
+    <section id="history-section" class="section hidden">
+      <div class="history-header">
+        <span class="label">Recently added</span>
+        <button id="clear-history" class="link-btn" type="button">Clear</button>
+      </div>
+      <ul id="history-list" class="history-list"></ul>
+    </section>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

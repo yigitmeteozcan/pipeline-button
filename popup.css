@@ -1,0 +1,221 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  width: 320px;
+  min-height: 200px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  background: #1b1f23;
+  color: #e6edf3;
+  padding: 0;
+}
+
+.container {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #30363d;
+}
+
+.header-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.header-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #e6edf3;
+}
+
+.header-sub {
+  font-size: 11px;
+  color: #8b949e;
+  margin-top: 2px;
+}
+
+/* ── Sections ──────────────────────────────────────────────────────────── */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Inputs ────────────────────────────────────────────────────────────── */
+
+.input-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.input {
+  flex: 1;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #e6edf3;
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  font-family: 'SF Mono', Consolas, monospace;
+  transition: border-color 0.15s;
+}
+
+.input::placeholder {
+  color: #484f58;
+}
+
+.input:focus {
+  border-color: #0a66c2;
+  box-shadow: 0 0 0 2px rgba(10, 102, 194, 0.25);
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────────── */
+
+.icon-btn {
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 7px 10px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.icon-btn:hover {
+  background: #30363d;
+  color: #e6edf3;
+}
+
+.btn-primary {
+  background: #0a66c2;
+  border: none;
+  border-radius: 6px;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px;
+  width: 100%;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover {
+  background: #004182;
+}
+
+.btn-primary:disabled {
+  background: #484f58;
+  cursor: not-allowed;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.link-btn:hover {
+  color: #e6edf3;
+}
+
+/* ── Status box ────────────────────────────────────────────────────────── */
+
+.status-box {
+  border-radius: 6px;
+  font-size: 12px;
+  padding: 10px 12px;
+  line-height: 1.5;
+}
+
+.status-box.success {
+  background: #0d2a1e;
+  border: 1px solid #057642;
+  color: #3fb950;
+}
+
+.status-box.error {
+  background: #2c1216;
+  border: 1px solid #cc1016;
+  color: #f85149;
+}
+
+/* ── History ───────────────────────────────────────────────────────────── */
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.history-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+.history-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 6px 8px;
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+}
+
+.history-name {
+  font-size: 12px;
+  color: #e6edf3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.history-time {
+  font-size: 10px;
+  color: #484f58;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+/* ── Utilities ─────────────────────────────────────────────────────────── */
+
+.hidden {
+  display: none !important;
+}
