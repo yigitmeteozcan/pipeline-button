@@ -242,8 +242,12 @@ test('Scenario 9 — manifest permissions are minimal and host_permissions are s
   assert.deepEqual(manifest.permissions, ['storage'],
     'permissions must be exactly ["storage"]');
 
+  // LinkedIn permission is intentionally https://www.linkedin.com/* (not /company/*)
+  // because the content script must run on all LinkedIn pages to detect SPA
+  // navigation (pushState) from /feed or /search to /company/* pages.
+  // The content script itself guards injection with an isOnCompanyPage() URL check.
   const allowed = new Set([
-    'https://www.linkedin.com/company/*',
+    'https://www.linkedin.com/*',
     'https://api.monday.com/*',
   ]);
   for (const hp of manifest.host_permissions) {
@@ -373,4 +377,45 @@ test('Scenario 12 — safeUrl rejects non-https URLs including javascript: and d
     !src.includes('sanitize(link.href)'),
     'link.href must use safeUrl not raw sanitize'
   );
+});
+
+// ── SCENARIO 13 — content script guards injection to company pages only ───
+//
+// The content script now runs on all of linkedin.com (wider match needed for
+// SPA navigation detection). Verify it guards injection with isOnCompanyPage()
+// so it never touches the DOM on feed/search/profile pages.
+
+test('Scenario 13 — content.js only injects button on company pages', () => {
+  const src = readSource('content.js');
+
+  // URL guard function must exist
+  assert.ok(src.includes('isOnCompanyPage'), 'isOnCompanyPage guard must exist');
+  assert.ok(
+    src.includes('COMPANY_URL_RE') || src.includes('/company/'),
+    'Company URL pattern must be defined'
+  );
+
+  // injectButton must check isOnCompanyPage before injecting
+  assert.ok(
+    src.includes('if (!isOnCompanyPage())'),
+    'injectButton must bail out when not on a company page'
+  );
+
+  // URL polling for SPA navigation must be present
+  assert.ok(
+    src.includes('setInterval') && src.includes('location.href'),
+    'URL polling must exist to detect pushState SPA navigation'
+  );
+
+  // Simulate the guard
+  function isOnCompanyPage(href) {
+    return /^https:\/\/www\.linkedin\.com\/company\//.test(href);
+  }
+
+  assert.equal(isOnCompanyPage('https://www.linkedin.com/company/acme/'), true);
+  assert.equal(isOnCompanyPage('https://www.linkedin.com/company/acme/about'), true);
+  assert.equal(isOnCompanyPage('https://www.linkedin.com/feed/'),            false);
+  assert.equal(isOnCompanyPage('https://www.linkedin.com/in/johndoe'),       false);
+  assert.equal(isOnCompanyPage('https://www.linkedin.com/search/results/'),  false);
+  assert.equal(isOnCompanyPage('https://www.linkedin.com/jobs/'),            false);
 });

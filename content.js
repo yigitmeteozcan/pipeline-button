@@ -1,8 +1,17 @@
 (() => {
   'use strict';
 
-  const BTN_ID = 'pipeline-btn-main';
+  const BTN_ID     = 'pipeline-btn-main';
   const BTN_PREFIX = 'pipeline-btn';
+
+  // Only inject the button on company pages — the content script itself runs
+  // on all of linkedin.com so it can catch SPA navigations from feed/search/
+  // profiles to company pages without needing a full page reload.
+  const COMPANY_URL_RE = /^https:\/\/www\.linkedin\.com\/company\//;
+
+  function isOnCompanyPage() {
+    return COMPANY_URL_RE.test(window.location.href);
+  }
 
   // ── Scraping helpers ──────────────────────────────────────────────────────
 
@@ -11,9 +20,6 @@
     return str.replace(/<[^>]*>/g, '').trim().slice(0, maxLen);
   }
 
-  // Only allow https:// URLs — rejects javascript:, data:, blob:, etc.
-  // Prevents a tampered LinkedIn DOM from injecting executable URLs into
-  // Monday comments.
   function safeUrl(raw, maxLen = 500) {
     if (typeof raw !== 'string') return '';
     const trimmed = raw.trim();
@@ -66,7 +72,6 @@
       ) || {}).textContent || ''
     );
 
-    // safeUrl rejects any non-https URL — prevents javascript:/data: injection
     const website = (() => {
       try {
         const link = document.querySelector(
@@ -154,7 +159,7 @@
     btn.style.cursor = 'pointer';
   }
 
-  // ── Click handler — all storage access is delegated to background.js ───────
+  // ── Click handler ─────────────────────────────────────────────────────────
 
   async function handleClick(btn) {
     try {
@@ -185,7 +190,7 @@
     }
   }
 
-  // ── Injection logic ───────────────────────────────────────────────────────
+  // ── Injection ─────────────────────────────────────────────────────────────
 
   function findInsertionPoint() {
     const candidates = [
@@ -204,7 +209,16 @@
     return null;
   }
 
+  function removeExistingButton() {
+    const existing = document.getElementById(BTN_ID);
+    if (existing) {
+      const wrapper = existing.closest('.' + BTN_PREFIX + '-wrapper') || existing.parentNode;
+      if (wrapper && wrapper !== document.body) wrapper.remove();
+    }
+  }
+
   function injectButton() {
+    if (!isOnCompanyPage()) return;
     if (document.getElementById(BTN_ID)) return;
 
     const anchor = findInsertionPoint();
@@ -215,10 +229,7 @@
 
     const wrapper = document.createElement('div');
     wrapper.className = BTN_PREFIX + '-wrapper';
-    Object.assign(wrapper.style, {
-      margin: '8px 0',
-      display: 'block',
-    });
+    Object.assign(wrapper.style, { margin: '8px 0', display: 'block' });
     wrapper.appendChild(btn);
 
     if (anchor.parentNode) {
@@ -228,23 +239,64 @@
     }
   }
 
-  // ── MutationObserver — handles LinkedIn SPA navigation ────────────────────
+  // Retry injection with backoff — LinkedIn renders content asynchronously
+  // after document_idle, so a single attempt at load time is not enough.
+  function scheduleInjectionAttempts() {
+    injectButton();
+    for (const ms of [300, 700, 1500, 3000, 6000]) {
+      setTimeout(injectButton, ms);
+    }
+  }
+
+  // ── SPA navigation detection ──────────────────────────────────────────────
+  //
+  // LinkedIn is a React SPA. Navigating from /feed or /search to /company/xyz
+  // changes the URL via pushState — Chrome does NOT re-inject content scripts
+  // for pushState navigations, so we must detect these ourselves.
+
+  let lastUrl = window.location.href;
+
+  function onUrlChange(newUrl) {
+    if (isOnCompanyPage()) {
+      // Entering a company page — clean up any stale button and re-inject
+      removeExistingButton();
+      scheduleInjectionAttempts();
+    } else {
+      // Leaving a company page — clean up
+      removeExistingButton();
+    }
+  }
+
+  const urlPollInterval = setInterval(() => {
+    const current = window.location.href;
+    if (current !== lastUrl) {
+      lastUrl = current;
+      onUrlChange(current);
+    }
+  }, 500);
+
+  // ── MutationObserver — catches async DOM rendering on same URL ────────────
 
   let debounceTimer = null;
 
-  function onMutation() {
+  const observer = new MutationObserver(() => {
+    if (!isOnCompanyPage()) return;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       if (!document.getElementById(BTN_ID)) {
         injectButton();
       }
     }, 300);
-  }
+  });
 
-  const observer = new MutationObserver(onMutation);
   observer.observe(document.body, { childList: true, subtree: true });
 
-  window.addEventListener('unload', () => observer.disconnect());
+  window.addEventListener('unload', () => {
+    clearInterval(urlPollInterval);
+    observer.disconnect();
+  });
 
-  injectButton();
+  // ── Initial injection ─────────────────────────────────────────────────────
+
+  scheduleInjectionAttempts();
 })();
