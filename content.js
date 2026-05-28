@@ -248,32 +248,36 @@
     }
   }
 
-  // ── SPA navigation detection ──────────────────────────────────────────────
+  // ── SPA navigation detection + persistent heartbeat ─────────────────────
   //
-  // LinkedIn is a React SPA. Navigating from /feed or /search to /company/xyz
-  // changes the URL via pushState — Chrome does NOT re-inject content scripts
-  // for pushState navigations, so we must detect these ourselves.
+  // LinkedIn is a React SPA. Two problems to solve:
+  //   1. pushState navigations don't re-inject content scripts.
+  //   2. React re-renders can remove the button at any time during a session.
+  //
+  // Solution: a single 1-second heartbeat that handles both. We track only the
+  // company slug (not the full URL) so that query-param changes like ?trk=…
+  // and sub-page navigations like /company/acme/about/ don't trigger a removal.
 
-  let lastUrl = window.location.href;
-
-  function onUrlChange(newUrl) {
-    if (isOnCompanyPage()) {
-      // Entering a company page — clean up any stale button and re-inject
-      removeExistingButton();
-      scheduleInjectionAttempts();
-    } else {
-      // Leaving a company page — clean up
-      removeExistingButton();
-    }
+  function getCompanySlug(href) {
+    const m = href.match(/linkedin\.com\/company\/([^/?#]+)/);
+    return m ? m[1] : null;
   }
 
-  const urlPollInterval = setInterval(() => {
-    const current = window.location.href;
-    if (current !== lastUrl) {
-      lastUrl = current;
-      onUrlChange(current);
+  let lastSlug = getCompanySlug(window.location.href);
+
+  const heartbeat = setInterval(() => {
+    const slug = getCompanySlug(window.location.href);
+
+    if (slug !== lastSlug) {
+      // Navigated to a different company or left company pages entirely
+      removeExistingButton();
+      lastSlug = slug;
     }
-  }, 500);
+
+    if (slug && !document.getElementById(BTN_ID)) {
+      injectButton();
+    }
+  }, 1000);
 
   // ── MutationObserver — catches async DOM rendering on same URL ────────────
 
@@ -292,7 +296,7 @@
   observer.observe(document.body, { childList: true, subtree: true });
 
   window.addEventListener('unload', () => {
-    clearInterval(urlPollInterval);
+    clearInterval(heartbeat);
     observer.disconnect();
   });
 
