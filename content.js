@@ -159,15 +159,47 @@
     btn.style.cursor = 'pointer';
   }
 
+  // ── Message helpers ───────────────────────────────────────────────────────
+
+  function sendMsg(msg) {
+    return new Promise(resolve => {
+      chrome.runtime.sendMessage(msg, response => {
+        // Must read lastError to suppress Chrome's "unchecked error" warning.
+        // This fires with response=undefined when the service worker is dormant
+        // and restarting; we handle that case in the callers below.
+        void chrome.runtime.lastError;
+        resolve(response);
+      });
+    });
+  }
+
+  // Retries for read-only CHECK_CONFIG only — safe because it has no side
+  // effects. ADD_TO_PIPELINE is intentionally single-shot to prevent duplicate
+  // Monday items if the service worker processed the request before the channel
+  // dropped.
+  async function sendMsgRetry(msg) {
+    for (let i = 0; i < 3; i++) {
+      const r = await sendMsg(msg);
+      if (r !== undefined) return r;
+      if (i < 2) await new Promise(ok => setTimeout(ok, 500));
+    }
+    return undefined;
+  }
+
   // ── Click handler ─────────────────────────────────────────────────────────
 
   async function handleClick(btn) {
     try {
-      const configResponse = await new Promise(resolve =>
-        chrome.runtime.sendMessage({ type: 'CHECK_CONFIG' }, resolve)
-      );
+      const configResponse = await sendMsgRetry({ type: 'CHECK_CONFIG' });
 
-      if (!configResponse || !configResponse.configured) {
+      if (!configResponse) {
+        // Service worker unreachable after retries — reset to default so the
+        // user can click again once the worker has had time to restart.
+        setDefaultState(btn);
+        return;
+      }
+
+      if (!configResponse.configured) {
         setUnconfiguredState(btn);
         return;
       }
@@ -176,9 +208,8 @@
 
       const data = scrapeCompany();
 
-      const response = await new Promise(resolve =>
-        chrome.runtime.sendMessage({ type: 'ADD_TO_PIPELINE', payload: data }, resolve)
-      );
+      // Single attempt — see note on sendMsgRetry above.
+      const response = await sendMsg({ type: 'ADD_TO_PIPELINE', payload: data });
 
       if (response && response.success) {
         setSuccessState(btn);
