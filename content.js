@@ -252,21 +252,31 @@
     if (!isOnCompanyPage()) return;
     if (document.getElementById(BTN_ID)) return;
 
-    const anchor = findInsertionPoint();
-    if (!anchor) return;
-
     const btn = createButton();
     btn.addEventListener('click', () => handleClick(btn));
 
     const wrapper = document.createElement('div');
     wrapper.className = BTN_PREFIX + '-wrapper';
-    Object.assign(wrapper.style, { margin: '8px 0', display: 'block' });
     wrapper.appendChild(btn);
 
-    if (anchor.parentNode) {
+    const anchor = findInsertionPoint();
+
+    if (anchor && anchor.parentNode) {
+      // Preferred: inject inline next to the company top-card element.
+      Object.assign(wrapper.style, { margin: '8px 0', display: 'block' });
       anchor.parentNode.insertBefore(wrapper, anchor.nextSibling);
     } else {
-      anchor.appendChild(wrapper);
+      // Fallback: LinkedIn's DOM isn't ready or doesn't match known selectors.
+      // Append to document.body directly — it is never touched by React's
+      // reconciler, so the button survives any LinkedIn re-render cycle.
+      Object.assign(wrapper.style, {
+        position: 'fixed',
+        bottom: '24px',
+        right: '24px',
+        margin: '0',
+        zIndex: '2147483647',
+      });
+      document.body.appendChild(wrapper);
     }
   }
 
