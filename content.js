@@ -17,7 +17,13 @@
 
   function sanitize(str, maxLen = 500) {
     if (typeof str !== 'string') return '';
-    return str.replace(/<[^>]*>/g, '').trim().slice(0, maxLen);
+    // Collapse the newlines and padding LinkedIn leaves inside its elements so
+    // the Monday item name is a single clean line.
+    return str
+      .replace(/<[^>]*>/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, maxLen);
   }
 
   function safeUrl(raw, maxLen = 500) {
@@ -27,11 +33,145 @@
     return sanitize(trimmed, maxLen);
   }
 
-  function scrapeCompany() {
-    const name = sanitize(
-      (document.querySelector('h1') || {}).textContent || '',
+  // ── Company name resolution ───────────────────────────────────────────────
+  //
+  // The first `h1` on a LinkedIn company page is often not the company name:
+  // the logged-in layout renders a visually-hidden `h1` for the page shell, and
+  // the public (logged-out) layout uses a different class entirely. Reading it
+  // blindly produced empty names, which the service worker then stored as
+  // "Unknown Company". Instead we walk a list of sources, most specific first,
+  // and reject anything empty or obviously not a company name.
+
+  // Titles LinkedIn renders in its page shell — never a real company.
+  const NAME_BLOCKLIST = new Set([
+    'linkedin', 'feed', 'home', 'search', 'notifications', 'messaging', 'jobs',
+    'my network', 'sign up', 'log in', 'join linkedin',
+  ]);
+
+  function isUsableName(candidate) {
+    if (!candidate) return false;
+    if (NAME_BLOCKLIST.has(candidate.toLowerCase())) return false;
+    return true;
+  }
+
+  // Strips LinkedIn's page-title decoration: an unread badge like "(3) " in
+  // front, and a " | LinkedIn" / " - LinkedIn" suffix at the end.
+  function cleanPageTitle(raw) {
+    return sanitize(
+      String(raw || '')
+        .replace(/^\(\d+\+?\)\s*/, '')
+        .replace(/\s*[|\-–—]\s*LinkedIn\s*$/i, ''),
       255
     );
+  }
+
+  // Last resort: derive a readable name from the URL slug, e.g.
+  // /company/acme-corp/ → "Acme Corp". Still far more useful than "Unknown".
+  function nameFromSlug(href) {
+    const slug = getCompanySlug(href);
+    if (!slug) return '';
+    let decoded = slug;
+    try {
+      decoded = decodeURIComponent(slug);
+    } catch (_) {}
+    return sanitize(
+      decoded
+        .replace(/[-_+]+/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase()),
+      255
+    );
+  }
+
+  function textOf(selector) {
+    try {
+      const el = document.querySelector(selector);
+      return el ? sanitize(el.textContent || '', 255) : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function nameFromHeadings() {
+    // The company name is inside `main` when LinkedIn renders the top card;
+    // only fall back to a page-wide h1 if that layout is unfamiliar. These are
+    // two separate queries because querySelectorAll returns document order,
+    // not selector order.
+    for (const selector of ['main h1', 'h1']) {
+      try {
+        for (const el of document.querySelectorAll(selector)) {
+          const t = sanitize(el.textContent || '', 255);
+          if (isUsableName(t)) return t;
+        }
+      } catch (_) {}
+    }
+    return '';
+  }
+
+  function nameFromStructuredData() {
+    try {
+      const blocks = document.querySelectorAll('script[type="application/ld+json"]');
+      for (const block of blocks) {
+        let parsed;
+        try {
+          parsed = JSON.parse(block.textContent || '');
+        } catch (_) {
+          continue;
+        }
+        // LinkedIn nests its entities under @graph on some layouts.
+        const nodes = []
+          .concat(parsed || [])
+          .concat((parsed && parsed['@graph']) || []);
+        for (const node of nodes) {
+          if (!node || typeof node !== 'object') continue;
+          const type = String(node['@type'] || '');
+          if (!/organization|corporation|company/i.test(type)) continue;
+          const t = sanitize(node.name || '', 255);
+          if (isUsableName(t)) return t;
+        }
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  function scrapeCompanyName() {
+    const candidates = [
+      // Logged-in company top card.
+      () => textOf('.org-top-card-summary__title'),
+      () => textOf('[data-test-id="org-top-card-summary__title"]'),
+      // Public / logged-out company page.
+      () => textOf('.top-card-layout__title'),
+      () => textOf('[data-test-id="about-us__name"] dd'),
+      // Generic headings, skipping the empty page-shell h1.
+      nameFromHeadings,
+      // Metadata LinkedIn ships even before the top card hydrates.
+      nameFromStructuredData,
+      () => {
+        try {
+          const meta = document.querySelector('meta[property="og:title"]');
+          return meta ? cleanPageTitle(meta.getAttribute('content')) : '';
+        } catch (_) {
+          return '';
+        }
+      },
+      () => cleanPageTitle(document.title),
+      // Never send an empty name — the URL always carries the slug.
+      () => nameFromSlug(window.location.href),
+    ];
+
+    for (const resolve of candidates) {
+      let value = '';
+      try {
+        value = resolve();
+      } catch (_) {
+        value = '';
+      }
+      if (isUsableName(value)) return value;
+    }
+    return '';
+  }
+
+  function scrapeCompany() {
+    const name = scrapeCompanyName();
 
     const industry = sanitize(
       (document.querySelector(

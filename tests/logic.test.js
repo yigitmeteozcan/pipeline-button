@@ -12,7 +12,11 @@ const assert = require('node:assert/strict');
 
 function sanitize(str, maxLen = 500) {
   if (typeof str !== 'string') return '';
-  return str.replace(/<[^>]*>/g, '').trim().slice(0, maxLen);
+  return str
+    .replace(/<[^>]*>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, maxLen);
 }
 
 const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -248,4 +252,86 @@ test('Scenario 10 — MutationObserver detects removal and re-injects button', (
   assert.equal(reinjected, true, 'Button must be re-injected after removal');
   assert.equal(buttonExists, true, 'Button must exist after re-injection');
   done();
+});
+
+// ── Scenario 11: company name resolution never yields "Unknown" ───────────
+//
+// Mirrors scrapeCompanyName() in content.js. LinkedIn's page-shell h1 is often
+// empty or a generic label, which previously produced an empty name and an
+// "Unknown Company" item on the Monday board.
+
+const NAME_BLOCKLIST = new Set([
+  'linkedin', 'feed', 'home', 'search', 'notifications', 'messaging', 'jobs',
+  'my network', 'sign up', 'log in', 'join linkedin',
+]);
+
+function isUsableName(candidate) {
+  if (!candidate) return false;
+  if (NAME_BLOCKLIST.has(candidate.toLowerCase())) return false;
+  return true;
+}
+
+function cleanPageTitle(raw) {
+  return sanitize(
+    String(raw || '')
+      .replace(/^\(\d+\+?\)\s*/, '')
+      .replace(/\s*[|\-–—]\s*LinkedIn\s*$/i, ''),
+    255
+  );
+}
+
+function getCompanySlug(href) {
+  const m = String(href).match(/linkedin\.com\/company\/([^/?#]+)/);
+  return m ? m[1] : null;
+}
+
+function nameFromSlug(href) {
+  const slug = getCompanySlug(href);
+  if (!slug) return '';
+  let decoded = slug;
+  try {
+    decoded = decodeURIComponent(slug);
+  } catch (_) {}
+  return sanitize(
+    decoded.replace(/[-_+]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    255
+  );
+}
+
+function resolveName(sources, href) {
+  for (const value of sources) {
+    const clean = sanitize(value || '', 255);
+    if (isUsableName(clean)) return clean;
+  }
+  return nameFromSlug(href);
+}
+
+test('Scenario 11 — empty page-shell h1 falls through to a real name', () => {
+  const href = 'https://www.linkedin.com/company/acme-corp/';
+  // First source is the empty hidden h1 LinkedIn renders in its page shell.
+  assert.equal(resolveName(['', '  \n  ', 'Acme Corporation'], href), 'Acme Corporation');
+});
+
+test('Scenario 11 — generic LinkedIn shell titles are rejected', () => {
+  const href = 'https://www.linkedin.com/company/acme-corp/';
+  assert.equal(resolveName(['LinkedIn', 'Feed'], href), 'Acme Corp',
+    'Shell labels must not be used as the company name');
+});
+
+test('Scenario 11 — page title decoration is stripped', () => {
+  assert.equal(cleanPageTitle('(12) Acme Corporation | LinkedIn'), 'Acme Corporation');
+  assert.equal(cleanPageTitle('Acme Corporation - LinkedIn'), 'Acme Corporation');
+  assert.equal(cleanPageTitle('(9+) Beta Labs | LinkedIn'), 'Beta Labs');
+});
+
+test('Scenario 11 — slug fallback replaces "Unknown Company"', () => {
+  assert.equal(nameFromSlug('https://www.linkedin.com/company/acme-corp/'), 'Acme Corp');
+  assert.equal(nameFromSlug('https://www.linkedin.com/company/acme_labs?trk=x'), 'Acme Labs');
+  assert.equal(nameFromSlug('https://www.linkedin.com/company/caf%C3%A9-noir/'), 'Café Noir');
+  assert.equal(resolveName([], 'https://www.linkedin.com/company/acme-corp/'), 'Acme Corp',
+    'Name must never be empty when a slug is present');
+});
+
+test('Scenario 11 — multi-line h1 text is collapsed to one line', () => {
+  assert.equal(sanitize('\n  Acme\n  Corporation  \n', 255), 'Acme Corporation');
 });

@@ -6,6 +6,7 @@
 
 - Visit any LinkedIn company page — a blue **＋ Add to Pipeline** button appears below the company name
 - Click it once — the extension scrapes the company's name, industry, size, description, HQ, and website
+- The company name is resolved from the top card first, then structured data, the page title, and finally the URL slug — so an item is never created as "Unknown Company"
 - A new item is created on your Monday board and a structured comment with all details is posted automatically
 
 ## Install
@@ -50,9 +51,10 @@ This creates `icons/icon-16.png`, `icons/icon-48.png`, `icons/icon-128.png` — 
 
 ```bash
 node --test tests/logic.test.js
+node --test tests/security.test.js
 ```
 
-All 10 scenarios must pass before deploying.
+All scenarios must pass before deploying.
 
 ## Security
 
