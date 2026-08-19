@@ -260,15 +260,31 @@ test('Scenario 10 — MutationObserver detects removal and re-injects button', (
 // empty or a generic label, which previously produced an empty name and an
 // "Unknown Company" item on the Monday board.
 
-const NAME_BLOCKLIST = new Set([
-  'linkedin', 'feed', 'home', 'search', 'notifications', 'messaging', 'jobs',
-  'my network', 'sign up', 'log in', 'join linkedin',
+const CHROME_WORDS = new Set([
+  'linkedin', 'home', 'about', 'posts', 'jobs', 'people', 'life', 'videos',
+  'events', 'insights', 'products', 'ads', 'similar', 'affiliated', 'related',
+  'page', 'pages', 'overview', 'feed', 'search', 'notifications', 'messaging',
+  'network', 'my', 'sign', 'up', 'log', 'in', 'join', 'and', 'the', 'skip',
+  'to', 'main', 'content', 'menu', 'navigation', 'nav', 'tab', 'tabs',
 ]);
+
+function nameKey(str) {
+  return String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
 
 function isUsableName(candidate) {
   if (!candidate) return false;
-  if (NAME_BLOCKLIST.has(candidate.toLowerCase())) return false;
+  const words = candidate.toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);
+  if (words.length === 0) return false;
+  if (words.every(w => CHROME_WORDS.has(w))) return false;
   return true;
+}
+
+function matchesSlug(candidate, slug) {
+  const a = nameKey(candidate);
+  const b = nameKey(slug);
+  if (!a || !b) return false;
+  return a.startsWith(b) || b.startsWith(a) || a.includes(b) || b.includes(a);
 }
 
 function cleanPageTitle(raw) {
@@ -298,11 +314,24 @@ function nameFromSlug(href) {
   );
 }
 
-function resolveName(sources, href) {
-  for (const value of sources) {
-    const clean = sanitize(value || '', 255);
-    if (isUsableName(clean)) return clean;
+// Mirrors scrapeCompanyName(): collect usable candidates in priority order,
+// prefer one that matches the URL slug, then fall back.
+function resolveName(rawSources, href) {
+  const slug = getCompanySlug(href);
+  const all = rawSources.map(v => sanitize(v || '', 255)).filter(Boolean);
+  const found = all.filter(isUsableName);
+
+  const slugKey = nameKey(slug);
+  if (slugKey) {
+    for (const value of all) {
+      if (nameKey(value) === slugKey) return value;
+    }
   }
+
+  for (const value of found) {
+    if (matchesSlug(value, slug)) return value;
+  }
+  if (found.length > 0) return found[0];
   return nameFromSlug(href);
 }
 
@@ -312,10 +341,38 @@ test('Scenario 11 — empty page-shell h1 falls through to a real name', () => {
   assert.equal(resolveName(['', '  \n  ', 'Acme Corporation'], href), 'Acme Corporation');
 });
 
-test('Scenario 11 — generic LinkedIn shell titles are rejected', () => {
+test('Scenario 11 — nav tab headings never become the company name', () => {
   const href = 'https://www.linkedin.com/company/acme-corp/';
-  assert.equal(resolveName(['LinkedIn', 'Feed'], href), 'Acme Corp',
-    'Shell labels must not be used as the company name');
+  // The company page nav renders "Home"/"About" headings — the bug that put
+  // "Home" on the board.
+  assert.equal(resolveName(['Home'], href), 'Acme Corp');
+  assert.equal(resolveName(['Home page'], href), 'Acme Corp');
+  assert.equal(resolveName(['About'], href), 'Acme Corp');
+  assert.equal(resolveName(['LinkedIn', 'Feed'], href), 'Acme Corp');
+  assert.equal(resolveName(['Skip to main content'], href), 'Acme Corp');
+});
+
+test('Scenario 11 — a real name containing a chrome word still passes', () => {
+  const href = 'https://www.linkedin.com/company/acme-life/';
+  assert.equal(resolveName(['Acme Life'], href), 'Acme Life',
+    'Only all-chrome candidates may be rejected');
+});
+
+test('Scenario 11 — slug affinity beats page position', () => {
+  const href = 'https://www.linkedin.com/company/acme-corp/';
+  // A stale og:title from the previous SPA route sits ahead of the real name.
+  assert.equal(
+    resolveName(['Some Other Company', 'Acme Corporation'], href),
+    'Acme Corporation',
+    'The candidate matching the URL slug must win'
+  );
+});
+
+test('Scenario 11 — divergent display name is kept when nothing matches slug', () => {
+  // Rebrands: slug still says "twitter" but the page says "X". Keep the page.
+  const href = 'https://www.linkedin.com/company/twitter/';
+  assert.equal(resolveName(['X'], href), 'X',
+    'A real name must not be discarded just because the slug diverged');
 });
 
 test('Scenario 11 — page title decoration is stripped', () => {
@@ -334,4 +391,12 @@ test('Scenario 11 — slug fallback replaces "Unknown Company"', () => {
 
 test('Scenario 11 — multi-line h1 text is collapsed to one line', () => {
   assert.equal(sanitize('\n  Acme\n  Corporation  \n', 255), 'Acme Corporation');
+});
+
+test('Scenario 11 — a company whose real name is a chrome word is kept', () => {
+  // /company/linkedin/ is genuinely named "LinkedIn"; /company/nav/ is "Nav".
+  assert.equal(resolveName(['LinkedIn'], 'https://www.linkedin.com/company/linkedin/'), 'LinkedIn');
+  assert.equal(resolveName(['Nav'], 'https://www.linkedin.com/company/nav/'), 'Nav');
+  // But "Home" on a different company's page is still nav text.
+  assert.equal(resolveName(['Home'], 'https://www.linkedin.com/company/acme-corp/'), 'Acme Corp');
 });

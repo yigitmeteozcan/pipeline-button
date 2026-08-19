@@ -42,16 +42,43 @@
   // "Unknown Company". Instead we walk a list of sources, most specific first,
   // and reject anything empty or obviously not a company name.
 
-  // Titles LinkedIn renders in its page shell — never a real company.
-  const NAME_BLOCKLIST = new Set([
-    'linkedin', 'feed', 'home', 'search', 'notifications', 'messaging', 'jobs',
-    'my network', 'sign up', 'log in', 'join linkedin',
+  // Words LinkedIn uses for its own chrome — nav tabs, page shell, auth links.
+  // A candidate built only from these is never a company name: the company page
+  // nav renders headings like "Home" and "About", which is how "Home" ended up
+  // on the board.
+  const CHROME_WORDS = new Set([
+    'linkedin', 'home', 'about', 'posts', 'jobs', 'people', 'life', 'videos',
+    'events', 'insights', 'products', 'ads', 'similar', 'affiliated', 'related',
+    'page', 'pages', 'overview', 'feed', 'search', 'notifications', 'messaging',
+    'network', 'my', 'sign', 'up', 'log', 'in', 'join', 'and', 'the', 'skip',
+    'to', 'main', 'content', 'menu', 'navigation', 'nav', 'tab', 'tabs',
   ]);
+
+  // Comparison key: lowercase alphanumerics only, so "Acme Corp." and
+  // "acme-corp" reduce to the same string.
+  function nameKey(str) {
+    return String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
 
   function isUsableName(candidate) {
     if (!candidate) return false;
-    if (NAME_BLOCKLIST.has(candidate.toLowerCase())) return false;
+    const words = candidate.toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);
+    if (words.length === 0) return false;
+    // Reject when every word is LinkedIn chrome ("Home", "About", "Home page").
+    // A real name containing one such word ("Acme Life") still passes.
+    if (words.every(w => CHROME_WORDS.has(w))) return false;
     return true;
+  }
+
+  // The company page URL slug is the one thing on the page that is always about
+  // this company, so it is used to tell a real name apart from stray page text.
+  // Matches loosely in both directions: slug "acme-corp" accepts "Acme
+  // Corporation" (slug is a prefix) and "Acme" (name is a prefix).
+  function matchesSlug(candidate, slug) {
+    const a = nameKey(candidate);
+    const b = nameKey(slug);
+    if (!a || !b) return false;
+    return a.startsWith(b) || b.startsWith(a) || a.includes(b) || b.includes(a);
   }
 
   // Strips LinkedIn's page-title decoration: an unread badge like "(3) " in
@@ -134,16 +161,19 @@
   }
 
   function scrapeCompanyName() {
-    const candidates = [
+    const href = window.location.href;
+    const slug = getCompanySlug(href);
+
+    const sources = [
       // Logged-in company top card.
       () => textOf('.org-top-card-summary__title'),
       () => textOf('[data-test-id="org-top-card-summary__title"]'),
+      () => textOf('[class*="org-top-card-summary__title"]'),
       // Public / logged-out company page.
       () => textOf('.top-card-layout__title'),
       () => textOf('[data-test-id="about-us__name"] dd'),
-      // Generic headings, skipping the empty page-shell h1.
-      nameFromHeadings,
-      // Metadata LinkedIn ships even before the top card hydrates.
+      // Metadata — present before the top card hydrates, but can be stale for a
+      // moment after an SPA navigation, which the slug pass below screens out.
       nameFromStructuredData,
       () => {
         try {
@@ -154,24 +184,51 @@
         }
       },
       () => cleanPageTitle(document.title),
-      // Never send an empty name — the URL always carries the slug.
-      () => nameFromSlug(window.location.href),
+      // Headings last: on a company page the nav renders its own headings
+      // ("Home", "About"), so these are the least trustworthy source.
+      nameFromHeadings,
     ];
 
-    for (const resolve of candidates) {
+    const all = [];
+    for (const read of sources) {
       let value = '';
       try {
-        value = resolve();
+        value = read();
       } catch (_) {
         value = '';
       }
-      if (isUsableName(value)) return value;
+      if (value) all.push(value);
     }
-    return '';
+    const found = all.filter(isUsableName);
+
+    // Pass 0 — a candidate identical to the slug is this company by definition,
+    // even when it reads as LinkedIn chrome: /company/linkedin/ is really named
+    // "LinkedIn", /company/nav/ is really named "Nav".
+    const slugKey = nameKey(slug);
+    if (slugKey) {
+      for (const value of all) {
+        if (nameKey(value) === slugKey) return value;
+      }
+    }
+
+    // Pass 1 — the first candidate that actually corresponds to this company's
+    // URL slug. This is what rejects nav text like "Home" and stale metadata
+    // left over from the previous SPA route.
+    for (const value of found) {
+      if (matchesSlug(value, slug)) return value;
+    }
+
+    // Pass 2 — no candidate matched the slug. Happens legitimately when the
+    // display name and the slug diverge (rebrands, legacy slugs), so take the
+    // highest-priority candidate rather than discarding a real name.
+    if (found.length > 0) return found[0];
+
+    // Pass 3 — nothing usable in the DOM; the slug always names the company.
+    return nameFromSlug(href);
   }
 
   function scrapeCompany() {
-    const name = scrapeCompanyName();
+    const name = scrapeCompanyName() || nameFromSlug(window.location.href);
 
     const industry = sanitize(
       (document.querySelector(
@@ -275,8 +332,12 @@
     btn.style.cursor = 'not-allowed';
   }
 
-  function setSuccessState(btn) {
-    btn.textContent = '✓ Added to Pipeline';
+  function setSuccessState(btn, name) {
+    // Show the captured name so a wrong scrape is obvious immediately, instead
+    // of only being visible after switching to the Monday board.
+    const label = name ? '✓ Added ' + (name.length > 28 ? name.slice(0, 27) + '…' : name)
+                       : '✓ Added to Pipeline';
+    btn.textContent = label;
     btn.style.background = '#057642';
     btn.style.color = '#ffffff';
     btn.disabled = true;
@@ -348,11 +409,17 @@
 
       const data = scrapeCompany();
 
+      // Diagnostic for when a page scrapes wrong — open DevTools on the company
+      // page and this shows exactly what was captured before it was sent.
+      try {
+        console.debug('[Pipeline Button] scraped:', data);
+      } catch (_) {}
+
       // Single attempt — see note on sendMsgRetry above.
       const response = await sendMsg({ type: 'ADD_TO_PIPELINE', payload: data });
 
       if (response && response.success) {
-        setSuccessState(btn);
+        setSuccessState(btn, data.name);
       } else {
         setErrorState(btn);
       }
