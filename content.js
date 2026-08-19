@@ -60,6 +60,7 @@
     'page', 'pages', 'overview', 'feed', 'search', 'notifications', 'messaging',
     'network', 'my', 'sign', 'up', 'log', 'in', 'join', 'and', 'the', 'skip',
     'to', 'main', 'content', 'menu', 'navigation', 'nav', 'tab', 'tabs',
+    'verified', 'services', 'newsletter', 'follower', 'followers',
   ]);
 
   // Comparison key: lowercase alphanumerics only, so "Acme Corp." and
@@ -82,6 +83,32 @@
   // this company, so it is used to tell a real name apart from stray page text.
   // Matches loosely in both directions: slug "acme-corp" accepts "Acme
   // Corporation" (slug is a prefix) and "Acme" (name is a prefix).
+  // "NovoViz: Home" and "NovoViz Verified" both name NovoViz. Produce the
+  // plausible trimmings of a candidate so the slug check below can recognise
+  // which one is the bare company name.
+  function candidateVariants(value) {
+    const variants = [value];
+
+    // LinkedIn page titles read "<Company>: <Tab>".
+    const colon = value.indexOf(':');
+    if (colon > 0) variants.push(value.slice(0, colon).trim());
+
+    // Trailing chrome words, e.g. a "Verified" badge read out of the heading.
+    for (const variant of variants.slice()) {
+      const words = variant.split(/\s+/);
+      while (
+        words.length > 1 &&
+        CHROME_WORDS.has(words[words.length - 1].toLowerCase().replace(/[^a-z0-9]/g, ''))
+      ) {
+        words.pop();
+      }
+      const trimmed = words.join(' ').trim();
+      if (trimmed && trimmed !== variant) variants.push(trimmed);
+    }
+
+    return variants.filter(Boolean);
+  }
+
   function matchesSlug(candidate, slug) {
     const a = nameKey(candidate);
     const b = nameKey(slug);
@@ -180,6 +207,9 @@
       // Public / logged-out company page.
       () => textOf('.top-card-layout__title'),
       () => textOf('[data-test-id="about-us__name"] dd'),
+      // A heading inside main, which on a company page is the company name.
+      // Nav headings ("Home", "About") are filtered by the all-chrome rule.
+      nameFromHeadings,
       // Metadata — present before the top card hydrates, but can be stale for a
       // moment after an SPA navigation, which the slug pass below screens out.
       nameFromStructuredData,
@@ -191,10 +221,9 @@
           return '';
         }
       },
+      // The page title is the least specific source: it carries the active tab
+      // ("NovoViz: Home"), so it is only reached when nothing better exists.
       () => cleanPageTitle(document.title),
-      // Headings last: on a company page the nav renders its own headings
-      // ("Home", "About"), so these are the least trustworthy source.
-      nameFromHeadings,
     ];
 
     const all = [];
@@ -215,7 +244,9 @@
     const slugKey = nameKey(slug);
     if (slugKey) {
       for (const value of all) {
-        if (nameKey(value) === slugKey) return value;
+        for (const variant of candidateVariants(value)) {
+          if (nameKey(variant) === slugKey) return variant;
+        }
       }
     }
 
@@ -300,6 +331,17 @@
     return '';
   }
 
+  function siteFromLinks(root, selector) {
+    if (!root) return '';
+    try {
+      for (const el of root.querySelectorAll(selector)) {
+        const site = externalSite(el.getAttribute('href') || el.href || '');
+        if (site) return site;
+      }
+    } catch (_) {}
+    return '';
+  }
+
   function scrapeWebsite() {
     // 1. Explicit website fields on the About tab and the public layout.
     const selectors = [
@@ -310,44 +352,47 @@
       '.top-card-layout__entity-info a[href*="/redir/"]',
     ];
     for (const selector of selectors) {
-      try {
-        for (const el of document.querySelectorAll(selector)) {
-          const site = externalSite(el.getAttribute('href') || el.href || '');
-          if (site) return site;
-        }
-      } catch (_) {}
+      const site = siteFromLinks(document, selector);
+      if (site) return site;
     }
 
-    // 2. The "Visit website" button itself, found by its label. Matched against
-    //    a few localisations of the same action, then by any top-card link that
-    //    leaves LinkedIn.
+    // 2. Any outbound link in the action row that holds "Visit website". This
+    //    is the one container that resolves on every layout seen so far, since
+    //    the button itself is injected into it.
+    const fromActions = siteFromLinks(findActionsRow(), 'a[href]');
+    if (fromActions) return fromActions;
+
+    // 3. The "Visit website" control found by its label, in a few
+    //    localisations. Buttons are included because LinkedIn sometimes renders
+    //    the control as a button wrapped in the anchor that carries the href.
     const LABEL_RE = /visit\s*(the\s*)?website|website\s*besuchen|voir\s*le\s*site|sitio\s*web|visita\s*il\s*sito/i;
     try {
-      for (const el of document.querySelectorAll('a[href]')) {
+      for (const el of document.querySelectorAll('a[href], button')) {
         const label = sanitize(el.textContent || '', 80);
         const aria  = sanitize(el.getAttribute('aria-label') || '', 80);
         if (!LABEL_RE.test(label) && !LABEL_RE.test(aria)) continue;
-        const site = externalSite(el.getAttribute('href') || el.href || '');
+        const link = el.tagName === 'A' ? el : el.closest('a[href]');
+        if (!link) continue;
+        const site = externalSite(link.getAttribute('href') || link.href || '');
         if (site) return site;
       }
     } catch (_) {}
 
-    // 3. Structured data, which carries the canonical url on many company pages.
+    // 4. Structured data, which carries the canonical url on many company pages.
     const fromData = websiteFromStructuredData();
     if (fromData) return fromData;
 
-    // 4. Any outbound link in the top card, as a last resort.
-    try {
-      const card = document.querySelector('.org-top-card, .top-card-layout');
-      if (card) {
-        for (const el of card.querySelectorAll('a[href]')) {
-          const site = externalSite(el.getAttribute('href') || el.href || '');
-          if (site) return site;
-        }
-      }
-    } catch (_) {}
+    // 5. Any outbound link in the top card.
+    const fromCard = siteFromLinks(
+      document.querySelector('.org-top-card, .top-card-layout'),
+      'a[href]'
+    );
+    if (fromCard) return fromCard;
 
-    return '';
+    // 6. Last resort: the first link anywhere on the page that goes through
+    //    LinkedIn's outbound redirector. On a company page the top card's
+    //    website button precedes post content in document order.
+    return siteFromLinks(document, 'a[href*="/redir/"]');
   }
 
   function scrapeCompany() {

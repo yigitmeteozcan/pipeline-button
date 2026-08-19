@@ -266,6 +266,7 @@ const CHROME_WORDS = new Set([
   'page', 'pages', 'overview', 'feed', 'search', 'notifications', 'messaging',
   'network', 'my', 'sign', 'up', 'log', 'in', 'join', 'and', 'the', 'skip',
   'to', 'main', 'content', 'menu', 'navigation', 'nav', 'tab', 'tabs',
+  'verified', 'services', 'newsletter', 'follower', 'followers',
 ]);
 
 function nameKey(str) {
@@ -278,6 +279,24 @@ function isUsableName(candidate) {
   if (words.length === 0) return false;
   if (words.every(w => CHROME_WORDS.has(w))) return false;
   return true;
+}
+
+function candidateVariants(value) {
+  const variants = [value];
+  const colon = value.indexOf(':');
+  if (colon > 0) variants.push(value.slice(0, colon).trim());
+  for (const variant of variants.slice()) {
+    const words = variant.split(/\s+/);
+    while (
+      words.length > 1 &&
+      CHROME_WORDS.has(words[words.length - 1].toLowerCase().replace(/[^a-z0-9]/g, ''))
+    ) {
+      words.pop();
+    }
+    const trimmed = words.join(' ').trim();
+    if (trimmed && trimmed !== variant) variants.push(trimmed);
+  }
+  return variants.filter(Boolean);
 }
 
 function matchesSlug(candidate, slug) {
@@ -324,7 +343,9 @@ function resolveName(rawSources, href) {
   const slugKey = nameKey(slug);
   if (slugKey) {
     for (const value of all) {
-      if (nameKey(value) === slugKey) return value;
+      for (const variant of candidateVariants(value)) {
+        if (nameKey(variant) === slugKey) return variant;
+      }
     }
   }
 
@@ -601,4 +622,37 @@ test('Scenario 14 — the footer survives an entirely empty payload', () => {
   const body = buildUpdateBody({}, '2026-08-19');
   assert.equal(body, '➕ Added via Pipeline Button on 2026-08-19',
     'The provenance line is unconditional');
+});
+
+// ── Scenario 15: LinkedIn page titles carry the active tab ───────────────
+//
+// The title reads "<Company>: <Tab> | LinkedIn", and "NovoViz: Home" passed
+// the slug check because it starts with the slug — so the tab name reached
+// the board.
+
+test('Scenario 15 — the tab suffix is dropped from a page title', () => {
+  const href = 'https://www.linkedin.com/company/novoviz/';
+  assert.equal(resolveName([cleanPageTitle('NovoViz: Home | LinkedIn')], href), 'NovoViz');
+  assert.equal(resolveName([cleanPageTitle('NovoViz: People | LinkedIn')], href), 'NovoViz');
+  assert.equal(resolveName([cleanPageTitle('(3) NovoViz: Jobs | LinkedIn')], href), 'NovoViz');
+});
+
+test('Scenario 15 — a badge word trailing a heading is dropped', () => {
+  const href = 'https://www.linkedin.com/company/novoviz/';
+  assert.equal(resolveName(['NovoViz Verified'], href), 'NovoViz');
+});
+
+test('Scenario 15 — a colon inside a real company name is kept', () => {
+  // Nothing here matches the slug more closely, so the full name survives.
+  const href = 'https://www.linkedin.com/company/valve/';
+  assert.equal(resolveName(['Portal: The Company'], href), 'Portal: The Company');
+});
+
+test('Scenario 15 — the bare heading still wins over a decorated title', () => {
+  const href = 'https://www.linkedin.com/company/novoviz/';
+  assert.equal(
+    resolveName([cleanPageTitle('NovoViz: Home | LinkedIn'), 'NovoViz'], href),
+    'NovoViz',
+    'An exact slug match must beat a decorated candidate listed before it'
+  );
 });
