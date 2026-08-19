@@ -400,3 +400,72 @@ test('Scenario 11 — a company whose real name is a chrome word is kept', () =>
   // But "Home" on a different company's page is still nav text.
   assert.equal(resolveName(['Home'], 'https://www.linkedin.com/company/acme-corp/'), 'Acme Corp');
 });
+
+// ── Scenario 12: website resolution via the "Visit website" button ────────
+//
+// LinkedIn routes that button through its own redirector, so the raw href is
+// a linkedin.com URL and has to be unwrapped to be useful on a Monday board.
+
+function safeUrlTest(raw, maxLen = 500) {
+  if (typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith('https://')) return '';
+  return sanitize(trimmed, maxLen);
+}
+
+function unwrapLinkedInRedirect(href, base = 'https://www.linkedin.com/company/acme/') {
+  try {
+    const url = new URL(href, base);
+    const isLinkedIn = /(^|\.)linkedin\.com$/i.test(url.hostname);
+    if (isLinkedIn && /\/redir\//i.test(url.pathname)) {
+      const target = url.searchParams.get('url');
+      if (target) return target;
+    }
+    return url.href;
+  } catch (_) {
+    return '';
+  }
+}
+
+function externalSite(rawHref) {
+  const unwrapped = unwrapLinkedInRedirect(rawHref);
+  const clean = safeUrlTest(unwrapped);
+  if (!clean) return '';
+  try {
+    const host = new URL(clean).hostname;
+    if (/(^|\.)linkedin\.com$/i.test(host)) return '';
+    if (/(^|\.)licdn\.com$/i.test(host)) return '';
+  } catch (_) {
+    return '';
+  }
+  return clean;
+}
+
+test('Scenario 12 — LinkedIn redirect wrapper is unwrapped to the real site', () => {
+  const wrapped =
+    'https://www.linkedin.com/redir/redirect?url=https%3A%2F%2Facme%2Ecom&urlhash=abcd&trk=about_website';
+  assert.equal(externalSite(wrapped), 'https://acme.com',
+    'The url query param must be extracted, not the linkedin.com wrapper');
+});
+
+test('Scenario 12 — direct https website links pass through', () => {
+  assert.equal(externalSite('https://acme.com/'), 'https://acme.com/');
+  assert.equal(externalSite('https://www.acme.co.uk/about'), 'https://www.acme.co.uk/about');
+});
+
+test('Scenario 12 — links back into LinkedIn are never treated as the website', () => {
+  assert.equal(externalSite('https://www.linkedin.com/company/acme/'), '');
+  assert.equal(externalSite('https://media.licdn.com/logo.png'), '');
+  assert.equal(externalSite('/company/acme/about/'), '',
+    'Relative LinkedIn paths must not become the website');
+});
+
+test('Scenario 12 — non-https schemes stay rejected', () => {
+  assert.equal(externalSite('http://acme.com'), '', 'Plain http must be rejected');
+  assert.equal(externalSite('javascript:alert(1)'), '', 'javascript: must be rejected');
+  assert.equal(
+    externalSite('https://www.linkedin.com/redir/redirect?url=javascript%3Aalert(1)'),
+    '',
+    'A javascript: payload smuggled through the redirector must be rejected'
+  );
+});

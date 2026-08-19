@@ -227,6 +227,121 @@
     return nameFromSlug(href);
   }
 
+  // ── Website resolution ────────────────────────────────────────────────────
+  //
+  // The "Visit website" button in the top card is the most reliable source, but
+  // LinkedIn routes it through its own redirector
+  // (linkedin.com/redir/redirect?url=https%3A%2F%2Facme.com&urlhash=…), so the
+  // href has to be unwrapped before it is any use on a Monday board.
+
+  function unwrapLinkedInRedirect(href) {
+    try {
+      const url = new URL(href, window.location.href);
+      const isLinkedIn = /(^|\.)linkedin\.com$/i.test(url.hostname);
+      if (isLinkedIn && /\/redir\//i.test(url.pathname)) {
+        const target = url.searchParams.get('url');
+        if (target) return target;
+      }
+      return url.href;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  // A company's own site — not a link back into LinkedIn, and https only (the
+  // existing safeUrl guard).
+  function externalSite(rawHref) {
+    const unwrapped = unwrapLinkedInRedirect(rawHref);
+    const clean = safeUrl(unwrapped);
+    if (!clean) return '';
+    try {
+      const host = new URL(clean).hostname;
+      if (/(^|\.)linkedin\.com$/i.test(host)) return '';
+      if (/(^|\.)licdn\.com$/i.test(host)) return '';
+    } catch (_) {
+      return '';
+    }
+    return clean;
+  }
+
+  function websiteFromStructuredData() {
+    try {
+      const blocks = document.querySelectorAll('script[type="application/ld+json"]');
+      for (const block of blocks) {
+        let parsed;
+        try {
+          parsed = JSON.parse(block.textContent || '');
+        } catch (_) {
+          continue;
+        }
+        const nodes = []
+          .concat(parsed || [])
+          .concat((parsed && parsed['@graph']) || []);
+        for (const node of nodes) {
+          if (!node || typeof node !== 'object') continue;
+          const type = String(node['@type'] || '');
+          if (!/organization|corporation|company/i.test(type)) continue;
+          const candidates = [].concat(node.url || [], node.sameAs || []);
+          for (const candidate of candidates) {
+            const site = externalSite(String(candidate || ''));
+            if (site) return site;
+          }
+        }
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  function scrapeWebsite() {
+    // 1. Explicit website fields on the About tab and the public layout.
+    const selectors = [
+      '[data-test-id="about-us__website"] a',
+      'a[data-tracking-control-name*="website"]',
+      '.org-top-card-primary-actions a[href*="/redir/"]',
+      '.org-about-us-company-module__company-page-url a',
+      '.top-card-layout__entity-info a[href*="/redir/"]',
+    ];
+    for (const selector of selectors) {
+      try {
+        for (const el of document.querySelectorAll(selector)) {
+          const site = externalSite(el.getAttribute('href') || el.href || '');
+          if (site) return site;
+        }
+      } catch (_) {}
+    }
+
+    // 2. The "Visit website" button itself, found by its label. Matched against
+    //    a few localisations of the same action, then by any top-card link that
+    //    leaves LinkedIn.
+    const LABEL_RE = /visit\s*(the\s*)?website|website\s*besuchen|voir\s*le\s*site|sitio\s*web|visita\s*il\s*sito/i;
+    try {
+      for (const el of document.querySelectorAll('a[href]')) {
+        const label = sanitize(el.textContent || '', 80);
+        const aria  = sanitize(el.getAttribute('aria-label') || '', 80);
+        if (!LABEL_RE.test(label) && !LABEL_RE.test(aria)) continue;
+        const site = externalSite(el.getAttribute('href') || el.href || '');
+        if (site) return site;
+      }
+    } catch (_) {}
+
+    // 3. Structured data, which carries the canonical url on many company pages.
+    const fromData = websiteFromStructuredData();
+    if (fromData) return fromData;
+
+    // 4. Any outbound link in the top card, as a last resort.
+    try {
+      const card = document.querySelector('.org-top-card, .top-card-layout');
+      if (card) {
+        for (const el of card.querySelectorAll('a[href]')) {
+          const site = externalSite(el.getAttribute('href') || el.href || '');
+          if (site) return site;
+        }
+      }
+    } catch (_) {}
+
+    return '';
+  }
+
   function scrapeCompany() {
     const name = scrapeCompanyName() || nameFromSlug(window.location.href);
 
@@ -269,16 +384,7 @@
       ) || {}).textContent || ''
     );
 
-    const website = (() => {
-      try {
-        const link = document.querySelector(
-          '[data-test-id="about-us__website"] a, a[href*="//"][data-tracking-control-name*="website"]'
-        );
-        return link ? safeUrl(link.href) : '';
-      } catch (_) {
-        return '';
-      }
-    })();
+    const website = scrapeWebsite();
 
     const linkedin_url = safeUrl(window.location.href);
 

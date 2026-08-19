@@ -64,7 +64,7 @@ All scenarios must pass before deploying.
 - **No hardcoded secrets** — grep for any token pattern returns nothing.
 - **GraphQL variables** — all Monday mutations use `$variables`, so company names with `"`, `{`, `}`, `\` cannot inject into the query.
 - **`assertSafe()` guard** — background.js blocks any GraphQL string containing destructive operations (`delete_item`, `delete_board`, etc.) before the network call is made.
-- **Minimal permissions** — the manifest requests only `storage`. No `tabs`, no `webRequest`, no `browsingData`, no broad host permissions.
+- **Minimal permissions** — the only API permission requested is `storage`. No `tabs`, no `webRequest`, no `browsingData`. Host access is limited to `linkedin.com` (where the button is injected) and `api.monday.com` (the only host the extension ever calls).
 - **Content script isolation** — all button DOM manipulation uses `textContent` and `createElement`. No `eval()`, no `innerHTML` with dynamic data, no `document.write()`.
 - **Prototype pollution guard** — company names equal to `__proto__`, `constructor`, or `prototype` are rejected before any object operations.
 
@@ -73,7 +73,7 @@ All scenarios must pass before deploying.
 | Permission | Why |
 |---|---|
 | `storage` | Saves your API token and board ID securely |
-| `https://www.linkedin.com/company/*` | Injects the button on company pages |
+| `https://www.linkedin.com/*` | Injects the button on company pages. Matches all of LinkedIn so the button survives in-app navigation from the feed or search to a company page, which does not reload the page. The button only renders on `/company/` URLs. |
 | `https://api.monday.com/*` | Lets the background service worker call the Monday API |
 
 ## License
