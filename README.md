@@ -37,6 +37,10 @@ A new **item** is created with the company name, plus a **comment** containing:
 ➕ Added via Pipeline Button on 2026-05-27
 ```
 
+Fields the page doesn't publish are left out entirely rather than printed as
+an empty label, so a sparse company page produces a short comment instead of a
+list of blanks. The last line is always present.
+
 ## Generating icons
 
 Icons are generated programmatically (no design tool needed):

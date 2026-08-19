@@ -140,17 +140,32 @@
 
   // ── Post comment ──────────────────────────────────────────────────────────
 
+  // Builds the update body, dropping any field the page did not provide so the
+  // comment never shows a bare label with nothing after it.
+  function buildUpdateBody(payload, date) {
+    const fields = [
+      ['🔗 LinkedIn: ', payload.linkedin_url],
+      ['🏭 Industry: ', payload.industry],
+      ['👥 Size: ',     payload.size],
+      ['📍 HQ: ',       payload.headquarters],
+      ['🌐 Website: ',  payload.website],
+      ['📝 About: ',    payload.description],
+    ];
+
+    const lines = [];
+    for (const [label, value] of fields) {
+      const text = typeof value === 'string' ? value.trim() : '';
+      if (text) lines.push(label + text);
+    }
+    // The footer is unconditional — it records that the item came from here,
+    // which stays true even when every scraped field came back empty.
+    lines.push('➕ Added via Pipeline Button on ' + date);
+    return lines.join('\n');
+  }
+
   async function createUpdate(itemId, payload) {
     const date = new Date().toISOString().slice(0, 10);
-    const body = [
-      '🔗 LinkedIn: '  + (payload.linkedin_url  || ''),
-      '🏭 Industry: '  + (payload.industry       || ''),
-      '👥 Size: '      + (payload.size           || ''),
-      '📍 HQ: '        + (payload.headquarters   || ''),
-      '🌐 Website: '   + (payload.website        || ''),
-      '📝 About: '     + (payload.description    || ''),
-      '➕ Added via Pipeline Button on ' + date,
-    ].join('\n');
+    const body = buildUpdateBody(payload, date);
 
     const query = `
       mutation CreateUpdate($itemId: ID!, $body: String!) {

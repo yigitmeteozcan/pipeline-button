@@ -542,3 +542,63 @@ test('Scenario 13 — wrapped fallback button removes its own wrapper', () => {
 
   assert.equal(host.children.length, 0, 'The wrapper we created must be removed with it');
 });
+
+// ── Scenario 14: the Monday comment omits fields the page didn't have ────
+
+// Mirrors buildUpdateBody() in background.js.
+function buildUpdateBody(payload, date) {
+  const fields = [
+    ['🔗 LinkedIn: ', payload.linkedin_url],
+    ['🏭 Industry: ', payload.industry],
+    ['👥 Size: ',     payload.size],
+    ['📍 HQ: ',       payload.headquarters],
+    ['🌐 Website: ',  payload.website],
+    ['📝 About: ',    payload.description],
+  ];
+  const lines = [];
+  for (const [label, value] of fields) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (text) lines.push(label + text);
+  }
+  lines.push('➕ Added via Pipeline Button on ' + date);
+  return lines.join('\n');
+}
+
+test('Scenario 14 — a fully scraped company keeps every line', () => {
+  const body = buildUpdateBody({
+    linkedin_url: 'https://www.linkedin.com/company/novoviz/',
+    industry: 'Electronics Manufacturing',
+    size: '2-10 employees',
+    headquarters: 'Neuchâtel, NE',
+    website: 'https://novoviz.com',
+    description: 'SPAD imaging sensors',
+  }, '2026-08-19');
+
+  assert.equal(body.split('\n').length, 7, 'Six fields plus the footer');
+  assert.ok(body.includes('🌐 Website: https://novoviz.com'));
+});
+
+test('Scenario 14 — missing fields leave no bare labels behind', () => {
+  const body = buildUpdateBody({
+    linkedin_url: 'https://www.linkedin.com/company/acme/',
+    industry: '',
+    size: '   ',
+    headquarters: undefined,
+    website: null,
+    description: 'Acme builds things',
+  }, '2026-08-19');
+
+  assert.equal(body, [
+    '🔗 LinkedIn: https://www.linkedin.com/company/acme/',
+    '📝 About: Acme builds things',
+    '➕ Added via Pipeline Button on 2026-08-19',
+  ].join('\n'));
+  assert.ok(!/Industry:\s*$/m.test(body), 'No label may be left without a value');
+  assert.ok(!body.includes('HQ:'), 'A missing field must not appear at all');
+});
+
+test('Scenario 14 — the footer survives an entirely empty payload', () => {
+  const body = buildUpdateBody({}, '2026-08-19');
+  assert.equal(body, '➕ Added via Pipeline Button on 2026-08-19',
+    'The provenance line is unconditional');
+});
