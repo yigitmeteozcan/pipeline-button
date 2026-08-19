@@ -4,6 +4,14 @@
   const BTN_ID     = 'pipeline-btn-main';
   const BTN_PREFIX = 'pipeline-btn';
 
+  // Shared palette — same values as the popup's design tokens.
+  const BRAND        = '#0a66c2';
+  const BRAND_HOVER  = '#08528f';
+  const NEUTRAL      = '#5d6b7a';
+  const SUCCESS      = '#047857';
+  const DANGER       = '#b3261e';
+  const DANGER_HOVER = '#8f1e17';
+
   // Only inject the button on company pages — the content script itself runs
   // on all of linkedin.com so it can catch SPA navigations from feed/search/
   // profiles to company pages without needing a full page reload.
@@ -401,9 +409,10 @@
     Object.assign(btn.style, {
       display: 'inline-flex',
       alignItems: 'center',
+      justifyContent: 'center',
       gap: '6px',
       padding: '8px 20px',
-      background: '#0a66c2',
+      background: BRAND,
       color: '#ffffff',
       border: 'none',
       borderRadius: '24px',
@@ -412,30 +421,57 @@
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       cursor: 'pointer',
       margin: '8px 0',
-      transition: 'background 0.2s',
+      boxShadow: '0 1px 2px rgba(16, 24, 40, 0.14)',
+      transition: 'background 0.15s ease, box-shadow 0.15s ease, transform 0.08s ease',
       lineHeight: '1.4',
       whiteSpace: 'nowrap',
       zIndex: '9999',
     });
 
+    // Hover and press feedback, matching the popup's primary button. Skipped
+    // once the button is disabled so the success state stays visually settled.
+    btn.addEventListener('mouseenter', () => {
+      if (btn.disabled) return;
+      btn.style.background = btn.dataset.hover || BRAND_HOVER;
+      btn.style.boxShadow = '0 4px 12px rgba(16, 24, 40, 0.18)';
+    });
+    btn.addEventListener('mouseleave', () => {
+      if (btn.disabled) return;
+      btn.style.background = btn.dataset.base || BRAND;
+      btn.style.boxShadow = '0 1px 2px rgba(16, 24, 40, 0.14)';
+    });
+    btn.addEventListener('mousedown', () => {
+      if (!btn.disabled) btn.style.transform = 'translateY(1px)';
+    });
+    btn.addEventListener('mouseup', () => { btn.style.transform = 'none'; });
+
     setDefaultState(btn);
     return btn;
   }
 
+  // Applies one palette entry and records it so the hover handlers restore the
+  // right colour for whichever state the button is currently in.
+  function paint(btn, base, hover) {
+    btn.dataset.base = base;
+    btn.dataset.hover = hover || base;
+    btn.style.background = base;
+    btn.style.color = '#ffffff';
+  }
+
   function setDefaultState(btn) {
     btn.textContent = '＋ Add to Pipeline';
-    btn.style.background = '#0a66c2';
-    btn.style.color = '#ffffff';
+    paint(btn, BRAND, BRAND_HOVER);
+    btn.style.opacity = '1';
     btn.disabled = false;
     btn.style.cursor = 'pointer';
   }
 
   function setLoadingState(btn) {
-    btn.textContent = 'Adding...';
-    btn.style.background = '#999999';
-    btn.style.color = '#ffffff';
+    btn.textContent = 'Adding…';
+    paint(btn, NEUTRAL);
+    btn.style.opacity = '0.8';
     btn.disabled = true;
-    btn.style.cursor = 'not-allowed';
+    btn.style.cursor = 'progress';
   }
 
   function setSuccessState(btn, name) {
@@ -444,24 +480,24 @@
     const label = name ? '✓ Added ' + (name.length > 28 ? name.slice(0, 27) + '…' : name)
                        : '✓ Added to Pipeline';
     btn.textContent = label;
-    btn.style.background = '#057642';
-    btn.style.color = '#ffffff';
+    paint(btn, SUCCESS);
+    btn.style.opacity = '1';
     btn.disabled = true;
     btn.style.cursor = 'default';
   }
 
   function setErrorState(btn) {
     btn.textContent = '✗ Failed — retry?';
-    btn.style.background = '#cc1016';
-    btn.style.color = '#ffffff';
+    paint(btn, DANGER, DANGER_HOVER);
+    btn.style.opacity = '1';
     btn.disabled = false;
     btn.style.cursor = 'pointer';
   }
 
   function setUnconfiguredState(btn) {
     btn.textContent = '⚙ Set up Pipeline Button';
-    btn.style.background = '#666666';
-    btn.style.color = '#ffffff';
+    paint(btn, NEUTRAL);
+    btn.style.opacity = '1';
     btn.disabled = false;
     btn.style.cursor = 'pointer';
   }

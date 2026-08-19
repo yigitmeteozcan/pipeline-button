@@ -11,6 +11,7 @@
   const historySection = document.getElementById('history-section');
   const historyList    = document.getElementById('history-list');
   const clearHistory   = document.getElementById('clear-history');
+  const connPill       = document.getElementById('conn-pill');
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -22,6 +23,12 @@
 
   function hideStatus() {
     statusBox.className = 'status-box hidden';
+  }
+
+  // Header pill — a glance-level answer to "is this thing set up?"
+  function setPill(text, variant) {
+    connPill.textContent = text;
+    connPill.className = 'pill pill--' + variant;
   }
 
   function formatRelativeTime(ts) {
@@ -57,6 +64,11 @@
       const li = document.createElement('li');
       li.className = 'history-item';
 
+      const avatar = document.createElement('span');
+      avatar.className = 'history-avatar';
+      // First letter of the company, or a dot when the name is missing.
+      avatar.textContent = (entry.name || '·').trim().charAt(0) || '·';
+
       const nameSpan = document.createElement('span');
       nameSpan.className = 'history-name';
       nameSpan.textContent = entry.name || 'Unknown';
@@ -65,6 +77,7 @@
       timeSpan.className = 'history-time';
       timeSpan.textContent = formatRelativeTime(entry.timestamp);
 
+      li.appendChild(avatar);
       li.appendChild(nameSpan);
       li.appendChild(timeSpan);
       historyList.appendChild(li);
@@ -84,6 +97,10 @@
         if (result.MONDAY_BOARD_ID) {
           boardInput.value = result.MONDAY_BOARD_ID;
         }
+        setPill(
+          result.MONDAY_API_TOKEN && result.MONDAY_BOARD_ID ? 'Ready' : 'Not set up',
+          result.MONDAY_API_TOKEN && result.MONDAY_BOARD_ID ? 'ready' : 'idle'
+        );
         renderHistory(result.PIPELINE_HISTORY || []);
       }
     );
@@ -132,7 +149,7 @@
     }
 
     saveBtn.disabled = true;
-    saveBtn.textContent = 'Saving...';
+    saveBtn.textContent = 'Saving';
 
     // If token field is masked, keep the existing stored token
     if (token === null) {
@@ -145,7 +162,7 @@
     if (!token) {
       showStatus('Please enter a Monday API token.', 'error');
       saveBtn.disabled = false;
-      saveBtn.textContent = 'Save Settings';
+      saveBtn.textContent = 'Save settings';
       return;
     }
 
@@ -160,19 +177,21 @@
     tokenInput.type = 'password';
 
     // Verify connection — background.js reads token from storage, not from this message
-    saveBtn.textContent = 'Verifying...';
+    saveBtn.textContent = 'Verifying';
 
     chrome.runtime.sendMessage(
       { type: 'VERIFY_CONNECTION' },
       (response) => {
         saveBtn.disabled = false;
-        saveBtn.textContent = 'Save Settings';
+        saveBtn.textContent = 'Save settings';
 
         if (response && response.success) {
-          showStatus(`✓ Connected to Monday\nBoard: ${response.boardName}`, 'success');
+          setPill('Connected', 'ok');
+          showStatus(`Connected to Monday\nBoard: ${response.boardName}`, 'success');
         } else {
           const msg = (response && response.error) || 'Connection failed';
-          showStatus(`✗ ${msg}`, 'error');
+          setPill('Error', 'err');
+          showStatus(msg, 'error');
         }
       }
     );
