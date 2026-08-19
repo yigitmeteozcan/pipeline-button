@@ -469,3 +469,76 @@ test('Scenario 12 — non-https schemes stay rejected', () => {
     'A javascript: payload smuggled through the redirector must be rejected'
   );
 });
+
+// ── Scenario 13: removing our button never removes LinkedIn's ────────────
+//
+// The button is injected directly into LinkedIn's action row, so the removal
+// path must delete only our own node — never the parent that also holds
+// "Visit website" and "Message".
+
+function makeNode(id, className) {
+  return {
+    id: id || '',
+    className: className || '',
+    children: [],
+    parentNode: null,
+    appendChild(child) {
+      child.parentNode = this;
+      this.children.push(child);
+      return child;
+    },
+    remove() {
+      if (!this.parentNode) return;
+      const i = this.parentNode.children.indexOf(this);
+      if (i >= 0) this.parentNode.children.splice(i, 1);
+      this.parentNode = null;
+    },
+    closest(selector) {
+      const wanted = selector.replace(/^\./, '');
+      let node = this;
+      while (node) {
+        if (node.className === wanted) return node;
+        node = node.parentNode;
+      }
+      return null;
+    },
+  };
+}
+
+// Mirrors removeExistingButton() in content.js.
+function removeExistingButton(getById) {
+  const existing = getById('pipeline-btn-main');
+  if (!existing) return;
+  const wrapper = existing.closest('.pipeline-btn-wrapper');
+  if (wrapper) wrapper.remove();
+  else existing.remove();
+}
+
+test('Scenario 13 — inline button removal leaves LinkedIn action row intact', () => {
+  const row     = makeNode('', 'org-top-card-primary-actions');
+  const visit   = makeNode('', 'visit-website');
+  const message = makeNode('', 'message');
+  const ours    = makeNode('pipeline-btn-main', 'pipeline-btn-button');
+  row.appendChild(visit);
+  row.appendChild(message);
+  row.appendChild(ours);
+
+  removeExistingButton(() => ours);
+
+  assert.equal(row.children.length, 2, 'Only our button may be removed');
+  assert.ok(row.children.includes(visit), "LinkedIn's Visit website must survive");
+  assert.ok(row.children.includes(message), "LinkedIn's Message must survive");
+  assert.equal(ours.parentNode, null, 'Our button must be detached');
+});
+
+test('Scenario 13 — wrapped fallback button removes its own wrapper', () => {
+  const host    = makeNode('', 'page');
+  const wrapper = makeNode('', 'pipeline-btn-wrapper');
+  const ours    = makeNode('pipeline-btn-main', 'pipeline-btn-button');
+  host.appendChild(wrapper);
+  wrapper.appendChild(ours);
+
+  removeExistingButton(() => ours);
+
+  assert.equal(host.children.length, 0, 'The wrapper we created must be removed with it');
+});

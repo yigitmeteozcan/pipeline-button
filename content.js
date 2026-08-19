@@ -536,6 +536,49 @@
 
   // ── Injection ─────────────────────────────────────────────────────────────
 
+  // The row holding "Visit website", "Message" and "Following". Injecting here
+  // puts the button where a LinkedIn action button belongs, instead of letting
+  // it land in the page grid as its own block.
+  function findActionsRow() {
+    const direct = [
+      '.org-top-card-primary-actions__inner',
+      '.org-top-card-primary-actions',
+      '[class*="org-top-card-primary-actions"]',
+    ];
+    for (const selector of direct) {
+      try {
+        const el = document.querySelector(selector);
+        if (el) return el;
+      } catch (_) {}
+    }
+
+    // Newer layouts drop those class names, so derive the row from the action
+    // buttons themselves. Scoped to the top card so the global nav — which has
+    // its own "Messaging" control — can never match.
+    const ACTION_RE = /visit\s*website|^\s*message\s*$|^\s*following\s*$|^\s*follow\s*$/i;
+    let card = null;
+    try {
+      card = document.querySelector('.org-top-card, .top-card-layout, main');
+    } catch (_) {}
+    if (!card) return null;
+
+    try {
+      for (const el of card.querySelectorAll('a, button')) {
+        const label = sanitize(el.textContent || '', 60);
+        const aria  = sanitize(el.getAttribute('aria-label') || '', 60);
+        if (!ACTION_RE.test(label) && !ACTION_RE.test(aria)) continue;
+        // Walk up until we find the element that groups several controls —
+        // that is the row, not the button's own wrapper.
+        let node = el.parentElement;
+        for (let depth = 0; node && depth < 3; depth++) {
+          if (node.querySelectorAll('a, button').length >= 2) return node;
+          node = node.parentElement;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
   function findInsertionPoint() {
     const candidates = [
       '.org-top-card__primary-content',
@@ -555,10 +598,28 @@
 
   function removeExistingButton() {
     const existing = document.getElementById(BTN_ID);
-    if (existing) {
-      const wrapper = existing.closest('.' + BTN_PREFIX + '-wrapper') || existing.parentNode;
-      if (wrapper && wrapper !== document.body) wrapper.remove();
-    }
+    if (!existing) return;
+    // Only ever remove our own nodes. The button is now injected directly into
+    // LinkedIn's action row, so falling back to parentNode here would delete
+    // LinkedIn's own buttons along with ours.
+    const wrapper = existing.closest('.' + BTN_PREFIX + '-wrapper');
+    if (wrapper) wrapper.remove();
+    else existing.remove();
+  }
+
+  // Sizing that matches an artdeco pill button, applied when the button sits in
+  // LinkedIn's own action row.
+  function applyInlineActionStyle(btn) {
+    Object.assign(btn.style, {
+      margin: '0 0 0 8px',
+      padding: '6px 16px',
+      minHeight: '32px',
+      borderRadius: '20px',
+      fontSize: '14px',
+      alignSelf: 'center',
+      flexShrink: '0',
+      verticalAlign: 'middle',
+    });
   }
 
   function injectButton() {
@@ -568,6 +629,14 @@
     const btn = createButton();
     btn.addEventListener('click', () => handleClick(btn));
 
+    // Preferred: sit inside the action row, beside "Visit website".
+    const actionsRow = findActionsRow();
+    if (actionsRow) {
+      applyInlineActionStyle(btn);
+      actionsRow.appendChild(btn);
+      return;
+    }
+
     const wrapper = document.createElement('div');
     wrapper.className = BTN_PREFIX + '-wrapper';
     wrapper.appendChild(btn);
@@ -575,7 +644,7 @@
     const anchor = findInsertionPoint();
 
     if (anchor && anchor.parentNode) {
-      // Preferred: inject inline next to the company top-card element.
+      // Next best: a block of its own directly below the top card.
       Object.assign(wrapper.style, { margin: '8px 0', display: 'block' });
       anchor.parentNode.insertBefore(wrapper, anchor.nextSibling);
     } else {
